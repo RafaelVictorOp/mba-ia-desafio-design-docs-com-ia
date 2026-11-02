@@ -1,8 +1,14 @@
 ### PRD: Order Management System Sistema de Webhooks de Notificação de Pedidos
 
-Versão: Pendente de definição
-Data: 2026-10-31
-Responsável: Marcos (Product Manager)
+| Campo | Valor |
+| --- | --- |
+| ID | PRD-webhooks-pedidos |
+| Status | Draft |
+| Autor | Marcos (Product Manager) |
+| Data | 2026-10-31 |
+| Versão | Pendente de definição |
+| Revisores | A definir; revisão de segurança por Sofia foi informada como necessária antes do deploy |
+| Documentos relacionados | [docs/RFC.md](RFC.md), [TRANSCRICAO.md](../TRANSCRICAO.md), [docs/TRACKER.md](TRACKER.md) |
 
 ---
 
