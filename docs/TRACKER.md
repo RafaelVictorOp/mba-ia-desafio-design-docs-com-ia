@@ -150,3 +150,4 @@
 | ADR-019 | docs/adrs/generated/WEBHOOKS/ADR-019-assinatura-hmac-por-endpoint.md | Decisão | Assinar o corpo outbound com HMAC-SHA256, secret exclusiva por endpoint e transporte HTTPS. | TRANSCRICAO | [09:23] Sofia |
 | ADR-020 | docs/adrs/generated/WEBHOOKS/ADR-020-entrega-at-least-once-com-event-id.md | Decisão | Usar entrega at-least-once e `X-Event-Id` para que o consumidor deduplique eventos repetidos. | TRANSCRICAO | [09:24] Diego |
 | ADR-020 | docs/adrs/generated/WEBHOOKS/ADR-020-entrega-at-least-once-com-event-id.md | Decisão | Usar entrega at-least-once e `X-Event-Id` para que o consumidor deduplique eventos repetidos. | TRANSCRICAO | [09:25] Diego |
+| ADR-021-CODE-001 | docs/adrs/ADR-021-autorizacao-por-vinculo-usuario-cliente.md | Lacuna da Implementação Atual | O schema atual não implementa uma relação `User`–`Customer` nem `CustomerMembership`; o modelo descrito no ADR é proposta. | CODIGO | prisma/schema.prisma |

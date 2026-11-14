@@ -13,7 +13,7 @@
 
 Este RFC propõe adicionar webhooks outbound ao OMS para informar clientes B2B sobre mudanças elegíveis de status de pedidos. A proposta usa Transactional Outbox no MySQL existente, um worker Node.js separado, entrega HTTPS assíncrona, assinatura HMAC-SHA256 e semântica at-least-once. O escopo e as decisões de produto/técnicas originalmente acordadas estão descritos no PRD e na transcrição; este RFC incorpora as diretrizes adicionais informadas pelo usuário durante sua elaboração.
 
-A proposta recomendada provisoriamente preserva o estilo modular e os mecanismos existentes. Há três decisões de design refinadas nesta entrevista: autorização CRUD por vínculo explícito usuário-cliente (cujo mecanismo ainda não existe nem está definido); soft delete dos webhooks com cancelamento de eventos ainda não iniciados; e tratamento imediato de payloads acima de 65.536 bytes como falha permanente em DLQ. O replay conserva o `event_id` de negócio, cria identificador independente por tentativa e recalcula a assinatura usando a secret ativa no instante do envio.
+A proposta recomendada provisoriamente preserva o estilo modular e os mecanismos existentes. Para autorização, este RFC define como fonte de verdade uma relação persistida `CustomerMembership` no MySQL, consultada em cada operação com a identidade do JWT e o cliente do recurso; concessões e revogações devem ocorrer por provisionamento administrativo confiável, sem autoassociação. A relação ainda precisa ser implementada e a proposta aprovada formalmente. Também são propostas o soft delete dos webhooks com cancelamento de eventos ainda não iniciados e a classificação imediata de payloads acima de 65.536 bytes como falha permanente em DLQ. O replay conserva o `event_id` de negócio, cria identificador independente por tentativa e recalcula a assinatura usando a secret ativa no instante do envio.
 
 O documento não afirma que a feature esteja implementada nem que a proposta tenha sido aceita formalmente pela equipe. O status permanece `Draft`. A recomendação não substitui a decisão formal dos revisores.
 
@@ -43,7 +43,7 @@ A solução precisa preservar a atomicidade entre mudança do pedido e registro 
 - Rodar múltiplos workers paralelos na primeira versão.
 - Introduzir Redis, broker dedicado, painel visual, notificações por e-mail ou rate limiting de saída nesta fase.
 - Arquivar entregas após 30 dias nesta fase.
-- Definir uma implementação de vínculo usuário-cliente antes de haver confirmação do modelo de identidade/autorização disponível.
+- Conceder ou revogar vínculos usuário-cliente por autoatendimento; o provisionamento fica restrito a um fluxo administrativo confiável.
 - Transformar a meta de menos de 10 segundos em garantia absoluta.
 
 ## 5. Situação atual (As-Is)
@@ -82,7 +82,7 @@ A solução precisa preservar a atomicidade entre mudança do pedido e registro 
 
 ### Classificação das afirmações
 
-Os requisitos-base acima são **Informados no PRD/transcrição** ou **Confirmados no código**, conforme referências. As políticas de vínculo explícito, rotação imediata, soft delete, DLQ para payload excessivo, identidade do replay e identificador por tentativa são **Informadas pelo usuário durante esta elaboração** e registradas como escolhas da proposta; não aparecem como decisões na transcrição original nem como implementação no código.
+Os requisitos-base acima são **Informados no PRD/transcrição** ou **Confirmados no código**, conforme referências. O modelo `CustomerMembership`, sua consulta por operação e seu provisionamento administrativo, assim como as políticas de rotação imediata, soft delete, DLQ para payload excessivo, identidade do replay e identificador por tentativa, são **diretrizes adotadas para esta proposta durante esta elaboração**; não aparecem como decisões na transcrição original nem como implementação no código. Portanto, descrevem o To-Be proposto, não comportamento existente nem aprovação formal.
 
 ## 7. Proposta técnica (To-Be)
 
@@ -90,9 +90,10 @@ Os requisitos-base acima são **Informados no PRD/transcrição** ou **Confirmad
 
 - Novo módulo `src/modules/webhooks` para configuração, consulta de entregas, rotação e replay, seguindo padrão controller/service/repository/routes/schemas.
 - Modelos MySQL/Prisma para configuração do endpoint, outbox, entregas/tentativas, DLQ e auditoria de replay/exclusão/rotação. O desenho físico, índices e retenção precisam ser detalhados no FDD.
+- Relação MySQL/Prisma `CustomerMembership` entre usuário e cliente, com estado ativo/revogado, chaves estrangeiras e unicidade por par usuário-cliente. Ela é a fonte autoritativa proposta para autorização por recurso; concessão e revogação ficam em provisionamento administrativo confiável e auditável, sem fluxo de autoassociação.
 - `src/worker.ts` como entry point separada, com PrismaClient próprio e polling em batches pequenos.
 - Integração no `OrderService.changeStatus()` para consultar endpoints ativos elegíveis, montar o snapshot e persistir o registro na mesma transação.
-- Validação de acesso do usuário ao cliente nas operações HTTP. Até existir fonte autoritativa para esse vínculo, endpoints de gestão não devem aceitar `customer_id` como autorização suficiente.
+- Em cada operação de gestão, consulta de histórico ou rotação, a API valida a identidade autenticada (`req.user.id`, derivada do JWT) junto ao `customer_id` do recurso contra um vínculo ativo em `CustomerMembership`. A ausência de vínculo resulta em negação; `customer_id` recebido e claims do JWT, isoladamente, não autorizam acesso. A checagem deve ocorrer no servidor em cada operação, sem depender de vínculo potencialmente desatualizado no token.
 - Worker que serializa o snapshot uma vez, mede bytes UTF-8, verifica configuração ativa, assina o corpo final e realiza POST HTTPS com timeout de 10 segundos.
 
 ### Fluxo de status e outbox
@@ -149,7 +150,7 @@ Replay reusa exatamente o payload snapshot e `event_id` original; não cria novo
 
 ### Autorização de gestão
 
-1. **Vínculo explícito usuário-cliente (diretriz escolhida).** Autenticar por JWT e autorizar cada operação usando uma relação ou política verificável entre usuário e `customer_id`; o mecanismo concreto permanece em aberto porque não foi localizado no schema nem definido pela transcrição.
+1. **Vínculo explícito usuário-cliente (proposta definida neste RFC).** Autenticar por JWT e validar em cada operação uma associação ativa em `CustomerMembership` para a identidade autenticada (`req.user.id`) e o `customer_id` do recurso. A tabela MySQL é a fonte de verdade proposta; concessão/revogação é administrativa e não há autoassociação. O schema atual não contém essa tabela, portanto a regra está definida no desenho, mas depende de implementação.
 2. **Qualquer usuário autenticado.** Reaproveita diretamente `authenticate`, mas não impede que usuário autenticado altere recursos de clientes não relacionados se conhecer um ID.
 3. **Somente `ADMIN` para todo o CRUD.** É simples com `requireRole`, mas centraliza operação nos administradores e não atende adequadamente à autonomia dos usuários dos clientes. Replay da DLQ permanece `ADMIN` em todas as alternativas.
 
@@ -182,11 +183,11 @@ Replay reusa exatamente o payload snapshot e `event_id` original; não cria novo
 | Critério | Vínculo explícito | Qualquer autenticado | Só ADMIN |
 | --- | --- | --- | --- |
 | Isolamento entre clientes | Melhor alinhamento: exige checagem de autorização por recurso | Fraco: identidade autenticada não prova acesso ao `customer_id` | Forte se admin for equipe confiável, mas não modela autonomia do cliente |
-| Complexidade | Média: depende de fonte autoritativa do vínculo, não identificada | Baixa inicialmente, alto risco de autorização indevida | Baixa/moderada com `requireRole`; pode aumentar carga operacional |
+| Complexidade | Média: requer nova relação persistida e provisionamento administrativo | Baixa inicialmente, alto risco de autorização indevida | Baixa/moderada com `requireRole`; pode aumentar carga operacional |
 | Compatibilidade | Reusa autenticação, precisa complementar autorização por recurso | Compatível com middleware atual, mas insuficiente para requisito | Compatível com `requireRole`, sem mudança de modelo de identidade |
 | Manutenção | Regra explícita e escalável, se relação for governada | Simples até haver acesso indevido; auditoria difícil por cliente | Fácil de entender, operacionalmente centralizada |
 
-**Trade-off principal recomendado provisoriamente:** a outbox e o vínculo por recurso adicionam estado e trabalho de implementação, mas reduzem acoplamento com sistemas externos e evitam confiar em `customer_id` fornecido pelo cliente. A recomendação depende de definir a fonte de vínculo usuário-cliente antes da implementação.
+**Trade-off principal recomendado provisoriamente:** a outbox e a relação `CustomerMembership` adicionam estado, migração e trabalho de provisionamento, mas reduzem acoplamento com sistemas externos e evitam confiar em `customer_id` fornecido pelo cliente. A fonte e a regra de autorização estão definidas nesta proposta; a implementação da relação e a aprovação formal continuam pendentes.
 
 ## 10. Impactos arquiteturais e integrações
 
@@ -194,7 +195,7 @@ Replay reusa exatamente o payload snapshot e `event_id` original; não cria novo
 - **Persistência:** novas tabelas/modelos e migration Prisma para configuração, outbox, tentativa/histórico, DLQ, exclusão e auditoria. Definir índices por status/data, FK e políticas de retenção no FDD. O modelo atual não contém essas entidades.
 - **Processos:** adicionar entry point e comando worker; cada processo terá seu próprio PrismaClient conforme a decisão registrada na transcrição. API e worker compartilham banco e configuração de conexão.
 - **HTTP/API:** rotas de CRUD, listagem por cliente, deliveries (até 100), rotação, rota administrativa de replay e possivelmente revogação emergencial. A API já agrega routers sob `/api/v1`; decidir compatibilidade/rota exata no FDD.
-- **Autorização:** integrar `authenticate` em todos endpoints de gestão e `requireRole('ADMIN')` no replay. Será necessária checagem de permissão por webhook/customer além do role. A associação ainda não existe no Prisma atual.
+- **Autorização:** integrar `authenticate` em todos os endpoints de gestão e consultar `CustomerMembership` para autorizar o cliente do recurso. A role, sozinha, não substitui esse vínculo nem concede bypass implícito em operações por cliente. O replay continua restrito a `ADMIN` e auditado, conforme requisito existente. A tabela ainda precisa ser adicionada ao Prisma e o provisionamento administrativo implementado conforme a regra definida.
 - **Cliente B2B:** recebe POST HTTPS com `X-Event-Id`, `X-Webhook-Id`, `X-Signature`, `X-Timestamp`, JSON; valida HMAC e deduplica pelo `event_id`.
 - **Observabilidade:** Pino já está disponível; logs estruturados devem registrar IDs, resultado, tamanho e estado, não secret nem payload sensível em claro. Métricas/tracing não estão definidos na origem.
 
@@ -204,6 +205,7 @@ Replay reusa exatamente o payload snapshot e `event_id` original; não cria novo
 
 - JWT é usado apenas para operações da API; os webhooks outbound não usam JWT. A integridade/autenticidade do request é validada pelo destinatário com HMAC-SHA256.
 - Verificar vínculo usuário-cliente no servidor para cada CRUD, histórico e rotação; IDs enviados não são credenciais. O replay permanece exclusivamente ADMIN e auditado.
+- A fonte de autorização proposta é `CustomerMembership` no MySQL. A consulta deve confirmar o par `user_id`/`customer_id` e estado ativo em cada operação; falhar fechado quando inexistente/revogado. Concessões e revogações não são self-service e devem ser feitas por fluxo administrativo confiável, com registro do ator e horário.
 - HTTPS obrigatório. A URL é controlada pelo usuário e gera chamada server-side. **Risco inferido a validar na revisão de segurança:** SSRF ou resolução para endereços internos/privados. Avaliar bloqueio de IPs reservados, revalidação DNS no momento do envio, redirects desabilitados ou revalidados, e controles de egress compatíveis com o ambiente; a transcrição/PRD não especifica esses controles.
 - Secrets exclusivas por endpoint, não registrar nos logs, devolver de forma controlada e definir armazenamento protegido em repouso. Criptografia/gestão de segredo não está definida no workspace e deve ser validada sem pressupor serviço de vault já existente.
 - Rotação normal ativa a nova secret imediatamente. Para mitigar falha de entrega pelo receptor desatualizado: retornar a nova secret somente na resposta segura da rotação; instruir o cliente a preparar verificação com chave atual e anterior; disponibilizar aviso/etapa de confirmação antes de solicitar rotação, se compatível com ativação imediata; comunicar que retries usarão a nova secret; expor erros de assinatura/resposta no histórico sem revelar secrets. Isso reduz risco, mas não garante que o receptor foi atualizado.
@@ -226,7 +228,7 @@ Replay reusa exatamente o payload snapshot e `event_id` original; não cria novo
 
 ### Etapas propostas
 
-1. **Resolver bloqueadores antes do código:** definir fonte e regra para vínculo usuário-cliente; decidir armazenamento/retorno seguro de secrets, mecanismo de revogação, status/estados de tentativa e a semântica de bloqueio concorrente da exclusão.
+1. **Resolver bloqueadores antes do código:** implementar e validar `CustomerMembership` e seu provisionamento administrativo; decidir armazenamento/retorno seguro de secrets, mecanismo de revogação, status/estados de tentativa e a semântica de bloqueio concorrente da exclusão.
 2. **Schema/migration:** adicionar configurações, outbox, deliveries, DLQ, auditoria, `deleted_at`/`deleted_by`, secret atual e secret anterior com expiração (ou representação equivalente). Índices/constraints para polling, idempotência e replay concorrente.
 3. **Persistência transacional:** integrar evento elegível com `changeStatus`; criar snapshot com UUID; para excesso, registrar DLQ sem lançar erro de validação de tamanho; preservar evento/transação.
 4. **API:** CRUD, listagem, deliveries, rotação e replay, com JWT, autorização por recurso, validação HTTPS, `requireRole('ADMIN')` para replay e auditoria.
@@ -252,7 +254,7 @@ A exclusão deve ocorrer em transação: marcar endpoint inativo/soft-deleted, c
 
 | Risco/premissa | Impacto | Mitigação proposta / estado |
 | --- | --- | --- |
-| Vínculo usuário-cliente ausente no modelo atual | Acesso cruzado ou bloqueio de lançamento | Bloqueador: escolher fonte autoritativa; não confiar em `customer_id`; teste negativo por cliente. |
+| Vínculo usuário-cliente ausente no modelo atual | Acesso cruzado ou bloqueio de lançamento | A fonte proposta é `CustomerMembership`; ainda é dependência de implementação. Criar e provisionar a relação por fluxo administrativo, negar vínculo ausente/revogado e testar acesso cruzado; não confiar em `customer_id`. |
 | Cliente ainda não confia na secret nova após rotação | HMAC recusado e retries/DLQ | Aviso e resposta segura na rotação; preparar receptor para duas chaves; telemetria de rejeição; documentar que retries usam chave nova. Não há garantia de atualização remota. |
 | Secret comprometida | Falsificação de evento ao endpoint | Revogação emergencial sem graça, secret exclusiva, HMAC, proteção em repouso e sem logging de valores. Procedimento detalhado pendente. |
 | Corrida soft delete/worker | Envio depois da exclusão ou cancelamento de request já iniciado | Claim condicional e serialização sobre o mesmo webhook; ponto de linearização `DISPATCHING`; teste concorrente e medição de lock. |
@@ -271,7 +273,7 @@ A exclusão deve ocorrer em transação: marcar endpoint inativo/soft-deleted, c
 - **Unitários:** elegibilidade por status; serialização e limite UTF-8 em bordas 65.535/65.536/65.537 bytes; HMAC e rotação; secret ativa em retry; janelas/expiração; política de cancelamento; estados/retry; assinatura e timestamp de tentativa; redaction de logs.
 - **Integração transacional:** pedido, histórico, estoque e evento elegível commitam juntos; falha real de persistência de outbox reverte conforme a garantia; payload acima do limite é persistido como DLQ e não causa rollback por ser excessivo; nenhuma configuração elegível significa nenhum registro.
 - **Worker/HTTP:** HTTPS, headers, timeout, resposta, falha transitória, ausência de HTTP para payload grande, validação antes de retry, secret ativa após rotação e `X-Timestamp` atual com payload original.
-- **Autorização:** sem JWT, JWT inválido, usuário autorizado, usuário sem vínculo, tentativa com `customer_id` de terceiro e ADMIN/non-ADMIN no replay.
+- **Autorização:** sem JWT, JWT inválido, vínculo ativo, vínculo ausente/revogado, tentativa com `customer_id` de terceiro e ADMIN/non-ADMIN no replay. Verificar que consulta a `CustomerMembership` ocorre por recurso e que a role não substitui o vínculo para operações de cliente.
 - **Exclusão concorrente:** worker e API disputam início de entrega; exclusão primeiro cancela e impede chamada; request já marcado como iniciado pode concluir; deliveries concluídas e DLQ permanecem; replay é recusado quando excluído.
 - **Replay:** mesmo `event_id` e payload snapshot; novo `attempt_id`; nova assinatura e timestamp; verificação de tamanho/estado; excesso mantém DLQ e retorna `WEBHOOK_PAYLOAD_TOO_LARGE`; dois replays simultâneos produzem no máximo uma nova tentativa ativa.
 - **Segurança:** revisão de HMAC, geração/armazenamento de secrets, revogação imediata, logs e defesa contra SSRF.
@@ -282,13 +284,13 @@ A exclusão deve ocorrer em transação: marcar endpoint inativo/soft-deleted, c
 - Payload acima de 65.536 bytes nunca resulta em chamada HTTP, truncamento ou retry; registro DLQ contém todos os dados de diagnóstico exigidos.
 - Replay não altera `event_id` nem payload; tentativa tem ID único, administrador identificado e resultado registrado.
 - Após soft delete commitado, nenhum evento ainda não despachado inicia chamada; preservam-se histórico entregue e DLQ.
-- Endpoints de gestão não permitem acesso sem autorização sobre o cliente; o critério só é verificável depois de definido o mecanismo de vínculo.
+- Endpoints de gestão permitem acesso somente com vínculo ativo em `CustomerMembership` para o cliente do recurso; vínculo ausente ou revogado é negado, mesmo que o usuário conheça o `customer_id`.
 - Medir latência de confirmação até início da primeira tentativa; objetivo <10 s em operação normal sem convertê-lo em garantia/SLA.
 - A equipe define métricas/limites operacionais e ambiente de teste antes do rollout; volume, p95 e disponibilidade não estão especificados.
 
 ## 15. Perguntas abertas e decisões pendentes
 
-1. **Bloqueador:** qual relação/fonte autoritativa determina que um usuário pode operar sobre determinado `customer_id`? A transcrição não define validação; o schema atual não tem essa relação. Não assumir implementação existente.
+1. **Fechado como decisão de desenho deste RFC:** `CustomerMembership` persistida no MySQL é a fonte autoritativa proposta. Cada operação consulta o par usuário autenticado/cliente do recurso e exige vínculo ativo; concessões e revogações são administrativas, sem autoassociação. A relação ainda não existe no schema, então implementação, provisionamento e testes de autorização são dependências de entrega, não perguntas abertas de desenho.
 2. Qual formato de armazenamento em repouso e entrega única para secrets atende aos mecanismos já disponíveis? Existe chave de aplicação configurada ou proteção operacional equivalente? Não confirmado.
 3. Qual contrato/rota autoriza revogação emergencial, e o que fazer com tentativas HTTP já iniciadas sob a secret revogada?
 4. A persistência de payload grande diretamente na DLQ junto da transação de pedido é aceita mesmo que uma falha de banco na escrita da DLQ aborte a transação? Se não, deve-se optar por outbox intermediária e promoção assíncrona, aceitando consistência eventual.
@@ -305,7 +307,7 @@ Recomenda-se provisoriamente seguir com Transactional Outbox no MySQL e worker i
 
 Para payload excessivo, recomenda-se calcular o tamanho UTF-8 no ponto de construção do snapshot e registrar diretamente na DLQ na mesma transação do pedido, como classificação terminal e sem lançar exceção de tamanho. Revalidar no worker e replay para defesa em profundidade. Para corrida de exclusão, usar claim/atualização condicional serializada e estado de despacho como ponto de não cancelamento, com validação concorrente antes de implementação.
 
-A justificativa é reduzir risco de bloqueio do OMS, reutilizar MySQL/Prisma e mecanismos já presentes e explicitar a identidade do evento, auditoria e limites de autorização. A recomendação é **provisória** porque depende da decisão do mecanismo de vínculo usuário-cliente, da revisão de segurança, do tratamento de falha de persistência DLQ e da validação da sincronização de exclusão/despacho. ADR(s) podem ser criados após decisão formal sobre essas questões e aceitação do RFC.
+A justificativa é reduzir risco de bloqueio do OMS, reutilizar MySQL/Prisma e mecanismos já presentes e explicitar a identidade do evento, auditoria e limites de autorização. A fonte e a regra de autorização usuário-cliente estão definidas como proposta neste RFC; a recomendação geral permanece **provisória** por depender da implementação/provisionamento do vínculo, da revisão de segurança, do tratamento de falha de persistência DLQ e da validação da sincronização de exclusão/despacho. A decisão de desenho sobre o vínculo pode ser formalizada no ADR-021 após revisão e aceitação.
 
 ## 17. Referências e evidências
 
@@ -332,10 +334,11 @@ A justificativa é reduzir risco de bloqueio do OMS, reutilizar MySQL/Prisma e m
 
 ### Fonte das decisões desta elaboração e lacunas de evidência
 
-As decisões de autorização por vínculo explícito, ativação imediata de secret, revogação emergencial, soft delete, cancelamento e preservação de registros, encaminhamento de payload excessivo diretamente à DLQ, resposta de replay por excesso e preservação de `event_id` foram **informadas pelo usuário nesta entrevista de elaboração**. A conversa não está registrada em `TRANSCRICAO.md`, e essas regras não estão implementadas no código consultado. Logo, são diretrizes escolhidas para esta proposta, não fatos do sistema nem decisões presentes na reunião original. A rastreabilidade a evidência persistida deverá ser complementada quando essas diretrizes forem incorporadas a uma fonte documental aprovada.
+As decisões de usar `CustomerMembership` persistida no MySQL, validar o vínculo ativo em cada operação e restringir concessão/revogação a provisionamento administrativo, além da ativação imediata de secret, revogação emergencial, soft delete, cancelamento e preservação de registros, encaminhamento de payload excessivo diretamente à DLQ, resposta de replay por excesso e preservação de `event_id`, foram **adotadas para esta proposta durante a conversa de elaboração**. A conversa não está registrada em `TRANSCRICAO.md`, e essas regras não estão implementadas no código consultado. Logo, são diretrizes de desenho, não fatos do sistema nem decisões presentes na reunião original. O item de desenho está fechado neste RFC, mas rastreabilidade documental válida e aprovação formal ainda dependem de incorporar a decisão a uma fonte aprovada; o tracker não deve atribuir evidência de código a uma implementação inexistente.
 
 ## 18. Histórico de revisões
 
 | Data | Alteração | Responsável |
 | --- | --- | --- |
 | 2026-11-02 | Criação do RFC em estado Draft a partir do PRD, transcrição, código consultado e diretrizes informadas durante a entrevista. | Não confirmado |
+| 2026-11-14 | Definição proposta de `CustomerMembership` como fonte de autorização por cliente; sincronização do ADR-021 e registro de que a pendência de concorrência do ADR-022 permanece aberta. | Não confirmado |
