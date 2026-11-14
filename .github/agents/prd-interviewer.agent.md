@@ -1,5 +1,5 @@
 ---
-name: PRD Interviewer
+name: prd-interviewer
 description: Conduz entrevistas estruturadas para especificar features, valida requisitos com o usuário e produz PRDs em Markdown e, opcionalmente, JSON.
 tools: ['read', 'search', 'edit']
 ---
