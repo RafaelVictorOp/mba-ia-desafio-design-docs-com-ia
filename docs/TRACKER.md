@@ -142,3 +142,48 @@
 | ADR-021-TRANS-001 | docs/adrs/ADR-021-autorizacao-por-vinculo-usuario-cliente.md | Contexto | A reunião indicou que o CRUD de configuração poderia ser usado por qualquer role autenticada. | TRANSCRICAO | [09:37] Sofia |
 | ADR-021-CODE-002 | docs/adrs/ADR-021-autorizacao-por-vinculo-usuario-cliente.md | Estado atual | O middleware valida JWT, popula `req.user` com id, email e role, e oferece autorização por roles com `requireRole`. | CODIGO | src/middlewares/auth.middleware.ts |
 | ADR-023-TRANS-001 | docs/adrs/ADR-023-classificar-payload-excedente-na-criacao.md | Requisito | A reunião definiu limite de payload de 64 KB e erro quando excedido. | TRANSCRICAO | [09:24] Larissa |
+| FDD-CTX-001 | docs/FDD.md | Estado atual | `changeStatus()` atualiza pedido, estoque e histórico dentro de uma transação Prisma. | CODIGO | src/modules/orders/order.service.ts |
+| FDD-CTX-002 | docs/FDD.md | Lacuna da Implementação Atual | O schema Prisma consultado não contém modelos de webhook, outbox ou DLQ. | CODIGO | prisma/schema.prisma |
+| FDD-CTX-003 | docs/FDD.md | Lacuna da Implementação Atual | O pacote atual não declara comando `worker`; o processo worker é um componente novo. | CODIGO | package.json |
+| FDD-PATTERN-001 | docs/FDD.md | Dependência Técnica | Reutilizar AppError, Pino, middleware centralizado de erros, schemas Zod e prefixo `WEBHOOK_` nos erros do módulo. | TRANSCRICAO | [09:30] Larissa |
+| FDD-OBJ-001 | docs/FDD.md | Requisito de Integridade | Evento elegível e mudança de status devem ser persistidos na mesma transação; falha de persistência reverte a operação. | TRANSCRICAO | [09:40] Bruno |
+| FDD-OBJ-002 | docs/FDD.md | Restrição | A chamada HTTP ao endpoint externo não deve ocorrer no fluxo síncrono de mudança de status. | TRANSCRICAO | [09:04] Bruno |
+| FDD-OBJ-003 | docs/FDD.md | Objetivo | O objetivo de tempo para primeira entrega é inferior a 10 segundos em operação normal. | TRANSCRICAO | [09:02] Marcos |
+| FDD-OBJ-004 | docs/FDD.md | Requisito Não Funcional | O worker consulta a outbox por polling a cada 2 segundos. | TRANSCRICAO | [09:09] Diego |
+| FDD-SCOPE-001 | docs/FDD.md | Restrição de Escopo | A feature é outbound; clientes não enviam webhooks para o OMS. | TRANSCRICAO | [09:02] Marcos |
+| FDD-SCOPE-002 | docs/FDD.md | Requisito Funcional | Usuários autenticados podem cadastrar, editar, remover e listar configurações de webhook. | TRANSCRICAO | [09:33] Bruno |
+| FDD-SCOPE-003 | docs/FDD.md | Requisito de Segurança | `customer_id` é enviado no body ou path e não é inferido diretamente do JWT. | TRANSCRICAO | [09:32] Larissa |
+| FDD-SCOPE-004 | docs/FDD.md | Regra de Negócio | Endpoints ativos são filtrados pelas inscrições no status de destino antes da inserção na outbox. | TRANSCRICAO | [09:34] Diego |
+| FDD-SCOPE-005 | docs/FDD.md | Restrição de Escopo | Notificação por e-mail de falhas fica fora desta fase. | TRANSCRICAO | [09:37] Larissa |
+| FDD-SCOPE-006 | docs/FDD.md | Restrição de Escopo | Dashboard visual para clientes fica fora desta fase; serão oferecidos endpoints de API. | TRANSCRICAO | [09:40] Larissa |
+| FDD-SCOPE-007 | docs/FDD.md | Restrição de Escopo | Rate limiting de saída fica fora desta fase; o volume será observado para avaliação futura. | TRANSCRICAO | [09:39] Larissa |
+| FDD-SCOPE-008 | docs/FDD.md | Restrição de Escopo | Arquivamento de registros entregues após cerca de 30 dias fica fora da feature. | TRANSCRICAO | [09:08] Diego |
+| FDD-SCOPE-009 | docs/FDD.md | Restrição de Escopo | A primeira versão não deve assumir garantia de ordenação global nem múltiplos workers paralelos. | TRANSCRICAO | [09:13] Larissa |
+| FDD-FLOW-001 | docs/FDD.md | Requisito de Arquitetura | O worker deve executar em processo separado da API. | TRANSCRICAO | [09:11] Larissa |
+| FDD-FLOW-002 | docs/FDD.md | Requisito de Arquitetura | O worker conecta ao mesmo banco e usa instância Prisma própria por processo. | TRANSCRICAO | [09:30] Bruno |
+| FDD-FLOW-003 | docs/FDD.md | Decisão | O evento usa UUID e guarda snapshot do payload no momento da inserção. | TRANSCRICAO | [09:52] Larissa |
+| FDD-CONTRACT-001 | docs/FDD.md | Contrato | Cadastro recebe URL e status de interesse; a plataforma gera a secret e a devolve na criação. | TRANSCRICAO | [09:31] Marcos |
+| FDD-CONTRACT-002 | docs/FDD.md | Contrato | O histórico deve expor até 100 entregas recentes com status, payload, resposta e tempo de resposta. | TRANSCRICAO | [09:34] Marcos |
+| FDD-CONTRACT-003 | docs/FDD.md | Contrato | A consulta de histórico foi definida como `GET /webhooks/:id/deliveries`. | TRANSCRICAO | [09:34] Marcos |
+| FDD-CONTRACT-004 | docs/FDD.md | Contrato | O replay manual da DLQ foi definido como `POST /admin/webhooks/dead-letter/:id/replay`. | TRANSCRICAO | [09:35] Diego |
+| FDD-CONTRACT-005 | docs/FDD.md | Contrato | O payload descreve mudança de status com `event_id`, `event_type`, timestamp ISO 8601, dados do pedido e `customer_id`, sem itens. | TRANSCRICAO | [09:43] Diego |
+| FDD-CONTRACT-006 | docs/FDD.md | Contrato | A entrega inclui `X-Event-Id`, `X-Signature`, `X-Timestamp`, `Content-Type` e `X-Webhook-Id`. | TRANSCRICAO | [09:44] Sofia |
+| FDD-SEC-001 | docs/FDD.md | Requisito de Segurança | Assinar o corpo outbound com HMAC-SHA256. | TRANSCRICAO | [09:20] Sofia |
+| FDD-SEC-002 | docs/FDD.md | Requisito de Segurança | Cada endpoint deve usar uma secret exclusiva, não uma secret global. | TRANSCRICAO | [09:21] Sofia |
+| FDD-SEC-003 | docs/FDD.md | Requisito de Segurança | Após rotação, a secret anterior permanece válida em paralelo por 24 horas. | TRANSCRICAO | [09:21] Sofia |
+| FDD-SEC-004 | docs/FDD.md | Requisito de Segurança | Recusar URL HTTP e exigir HTTPS para destinos de webhook. | TRANSCRICAO | [09:23] Sofia |
+| FDD-ERR-004 | docs/FDD.md | Requisito Não Funcional | Payload acima de 64 KB não deve ser enviado nem truncado; a destinação posterior ainda precisa ser definida. | TRANSCRICAO | [09:24] Larissa |
+| FDD-ERR-001 | docs/FDD.md | Requisito Não Funcional | Chamada HTTP que excede 10 segundos é tratada como falha de entrega. | TRANSCRICAO | [09:42] Diego |
+| FDD-ERR-002 | docs/FDD.md | Política de Retentativa | Os intervalos registrados para as cinco tentativas são 1 minuto, 5 minutos, 30 minutos, 2 horas e 12 horas. | TRANSCRICAO | [09:17] Diego |
+| FDD-ERR-003 | docs/FDD.md | Decisão | Persistir falhas permanentes em tabela DLQ separada com payload, motivo e timestamp. | TRANSCRICAO | [09:18] Diego |
+| FDD-AUTH-001 | docs/FDD.md | Requisito de Segurança | Replay da DLQ exige role `ADMIN` e registra quem solicitou. | TRANSCRICAO | [09:36] Sofia |
+| FDD-AUTH-003 | docs/FDD.md | Requisito de Segurança | Operações de gerenciamento de webhook usam JWT; o middleware atual valida JWT e popula a identidade autenticada. | CODIGO | src/middlewares/auth.middleware.ts |
+| FDD-AUTH-002 | docs/FDD.md | Lacuna da Implementação Atual | O schema atual não declara vínculo entre `User` e `Customer`; o mecanismo de autorização por vínculo não está implementado. | CODIGO | prisma/schema.prisma |
+| FDD-DELIVERY-001 | docs/FDD.md | Semântica de Entrega | Entrega at-least-once permite duplicatas; consumidor deduplica pelo UUID estável em `X-Event-Id`. | TRANSCRICAO | [09:25] Diego |
+| FDD-OBS-001 | docs/FDD.md | Dependência Técnica | O projeto já configura logger Pino com redação de campos sensíveis selecionados. | CODIGO | src/shared/logger/index.ts |
+| FDD-DEP-001 | docs/FDD.md | Dependência Técnica | O projeto declara Node.js `>=20`. | CODIGO | package.json |
+| FDD-DEP-002 | docs/FDD.md | Dependência Técnica | O Prisma existente usa provider MySQL. | CODIGO | prisma/schema.prisma |
+| FDD-DEP-003 | docs/FDD.md | Dependência Técnica | A dependência `@prisma/client` existente está fixada em 5.22.0. | CODIGO | package.json |
+| FDD-DEP-004 | docs/FDD.md | Dependência Organizacional | A revisão de segurança deve ocorrer antes do deploy, reservando pelo menos dois dias úteis. | TRANSCRICAO | [09:46] Sofia |
+| FDD-DEP-005 | docs/FDD.md | Dependência Técnica | O projeto usa Express 4.21.1. | CODIGO | package.json |
+| FDD-DEP-006 | docs/FDD.md | Dependência Técnica | O projeto usa Zod 3.23.8 para validação de schemas. | CODIGO | package.json |
