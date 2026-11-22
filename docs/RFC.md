@@ -19,11 +19,11 @@ O documento não afirma que a feature esteja implementada nem que a proposta ten
 
 ## 2. Contexto e problema
 
-**Informado na transcrição:** três clientes B2B pediram notificações sobre mudanças de status; atualmente consultam `GET /orders` repetidamente, o que torna suas integrações mais lentas e caras. Foi relatado risco comercial ligado ao prazo de atendimento. A reunião rejeitou chamadas HTTP síncronas no fluxo de atualização, pois a indisponibilidade de endpoints externos não deve bloquear a operação de pedidos ([TRANSCRICAO.md](../../TRANSCRICAO.md#L1-L40)).
+**Informado na transcrição:** três clientes B2B pediram notificações sobre mudanças de status; atualmente consultam `GET /orders` repetidamente, o que torna suas integrações mais lentas e caras (`[09:00] Marcos`). Foi relatado risco comercial ligado ao prazo de atendimento (`[09:00] Marcos`). A reunião rejeitou chamadas HTTP síncronas no fluxo de atualização, pois a indisponibilidade de endpoints externos não deve bloquear a operação de pedidos (`[09:03] Larissa`, `[09:04] Bruno`, `[09:05] Larissa`). ([TRANSCRICAO.md](../../TRANSCRICAO.md))
 
 **Confirmado no código:** `OrderService.changeStatus()` já opera numa transação Prisma que atualiza status, grava histórico e pode debitar ou repor estoque ([order.service.ts](../../src/modules/orders/order.service.ts#L126-L171)). O schema Prisma define MySQL e não contém modelos de webhook, outbox, histórico de entrega ou DLQ ([schema.prisma](../../prisma/schema.prisma#L1-L25)). A integração de webhook é, portanto, futura.
 
-A solução precisa preservar a atomicidade entre mudança do pedido e registro do evento, desacoplar latência de terceiros, permitir diagnóstico e replay controlado, e evitar acesso cruzado entre clientes. O tempo inferior a 10 segundos é objetivo para operação normal, não SLA garantido; backlog, indisponibilidade, retentativas e duração do processamento podem excedê-lo ([PRD.md](../PRD.md), seções “Objetivos e métricas” e “Requisitos não funcionais”).
+A solução precisa preservar a atomicidade entre mudança do pedido e registro do evento, desacoplar latência de terceiros, permitir diagnóstico e replay controlado, e evitar acesso cruzado entre clientes. O tempo inferior a 10 segundos é objetivo para operação normal, não SLA garantido; backlog, indisponibilidade, retentativas e duração do processamento podem excedê-lo (`[09:02] Marcos`, `[09:09] Diego`, `[09:10] Larissa`) ([PRD.md](../PRD.md), seções “Objetivos e métricas” e “Requisitos não funcionais”).
 
 ## 3. Objetivos
 
@@ -333,6 +333,58 @@ A justificativa é reduzir risco de bloqueio do OMS, reutilizar MySQL/Prisma e m
 - [TRANSCRICAO.md](../../TRANSCRICAO.md#L282-L314) — resumo e snapshot com UUID.
 - [docs/PRD.md](../PRD.md) — requisitos, escopo, riscos, métricas e critérios de aceitação consolidados.
 - [docs/TRACKER.md](../TRACKER.md) — rastreabilidade existente do PRD; esta atualização não pode comprovar decisões fornecidas apenas durante a entrevista atual por falta de fonte persistida permitida no tracker.
+
+### Rastreabilidade temporal da transcrição
+
+Os momentos abaixo registram exatamente onde os principais pontos presentes neste RFC foram abordados na transcrição.
+
+#### Contexto e arquitetura
+- **Necessidade dos clientes B2B e consulta repetitiva:** Atlas Comercial, MaxDistribuição e Nova Cargo pediram notificações e hoje usam `GET /orders` repetidamente (`[09:00] Marcos`).
+- **Prazo comercial da Atlas:** possível migração para concorrente se a entrega não ocorrer até o fim do trimestre (`[09:00] Marcos`).
+- **Critério de tempo real:** menos de 10 segundos é considerado tempo real pelos clientes (`[09:02] Marcos`).
+- **Escopo somente outbound:** o OMS envia aos clientes; eles não enviam webhooks inbound para a plataforma (`[09:02] Sofia`, `[09:02] Marcos`, `[09:03] Sofia`).
+- **Rejeição do envio síncrono:** um endpoint lento ou indisponível não pode bloquear ou fazer rollback da mudança de status (`[09:04] Bruno`, `[09:05] Larissa`).
+- **Transactional Outbox:** evento inserido na tabela de outbox na mesma transação SQL que atualiza o pedido e o histórico (`[09:06] Diego`).
+- **Redis/broker dedicado descartado:** Redis Streams não foi escolhido para evitar infraestrutura adicional no MySQL existente (`[09:07] Larissa`, `[09:07] Diego`).
+- **Polling a cada 2 segundos:** o worker busca pendentes mais antigos em batch pequeno; triggers não notificam processos externos (`[09:09] Diego`, `[09:09] Bruno`, `[09:09] Diego`, `[09:10] Larissa`).
+- **Worker separado:** o processo não pode compartilhar o ciclo de vida da API; entry point proposta `src/worker.ts` e script `npm run worker` (`[09:11] Diego`, `[09:11] Larissa`, `[09:11] Bruno`, `[09:28] Bruno`, `[09:28] Diego`).
+- **Ordenação inicial:** único worker processa por `created_at`; múltiplos workers e ordenação global ficam fora da primeira versão (`[09:12] Diego`, `[09:13] Diego`, `[09:13] Larissa`, `[09:14] Marcos`).
+- **Prisma por processo:** worker conecta ao mesmo banco com instância Prisma própria, pois é outro processo Node.js (`[09:29] Diego`, `[09:30] Bruno`, `[09:30] Larissa`).
+
+#### Contratos e entrega
+- **Snapshot na outbox:** o payload é renderizado na inserção para refletir o estado da mudança, não o estado posterior do pedido (`[09:51] Diego`, `[09:51] Larissa`, `[09:51] Bruno`, `[09:52] Larissa`, `[09:52] Diego`, `[09:52] Bruno`).
+- **UUID da outbox:** decisão de usar UUID, no padrão do restante do projeto (`[09:51] Diego`, `[09:51] Larissa`).
+- **Integração transacional com pedidos:** `changeStatus` deve publicar o evento elegível usando o cliente transacional atual e falha de outbox deve reverter todo o fluxo (`[09:40] Bruno`, `[09:41] Diego`, `[09:41] Bruno`, `[09:41] Diego`).
+- **Filtragem na outbox:** configurações inativas ou não inscritas no status não produzem evento; a filtragem ocorre na inserção, não no envio (`[09:33] Marcos`, `[09:34] Diego`, `[09:34] Bruno`, `[09:34] Diego`).
+- **Payload do evento:** JSON com `event_id`, `event_type`, timestamp ISO 8601, dados do pedido, `customer_id` e campos básicos como `total_cents`, sem `items` (`[09:43] Marcos`, `[09:43] Diego`, `[09:44] Bruno`).
+- **Headers de entrega:** `X-Event-Id`, `X-Webhook-Id`, `X-Signature`, `X-Timestamp` e `Content-Type: application/json` (`[09:44] Diego`, `[09:44] Sofia`, `[09:45] Diego`).
+- **At-least-once:** duplicatas são possíveis e exactly-once foi descartado pela coordenação necessária entre plataforma e consumidor (`[09:24] Diego`, `[09:25] Bruno`, `[09:25] Diego`, `[09:25] Sofia`, `[09:26] Larissa`).
+- **Deduplicação pelo consumidor:** o cliente usa o UUID de `X-Event-Id` para reconhecer repetições (`[09:25] Bruno`, `[09:25] Diego`, `[09:25] Sofia`, `[09:26] Larissa`).
+- **Timeout HTTP:** 10 segundos; uma chamada não concluída nesse prazo é falha e entra na política de retry (`[09:42] Sofia`, `[09:42] Diego`).
+- **Limite de payload informado na reunião:** rejeitar payload acima de 64 KB sem enviar ou truncar (`[09:23] Sofia`, `[09:24] Larissa`, `[09:24] Diego`). O limite físico adotado na proposta é 65.536 bytes/64 KiB.
+
+#### Retentativas, DLQ e replay
+- **Cinco tentativas adicionais:** os intervalos acordados são 1 minuto, 5 minutos, 30 minutos, 2 horas e 12 horas (`[09:15] Diego`, `[09:16] Larissa`, `[09:17] Diego`, `[09:17] Marcos`, `[09:17] Larissa`). A contagem como adicional à tentativa inicial foi esclarecida durante a elaboração posterior do PRD, não explicitamente definida na transcrição.
+- **DLQ separada:** tabela `webhook_dead_letter` com payload, motivo da falha e timestamp, separada da outbox principal (`[09:17] Larissa`, `[09:18] Diego`, `[09:18] Bruno`, `[09:18] Diego`).
+- **Replay administrativo:** `POST /admin/webhooks/dead-letter/:id/replay` recoloca o evento na outbox como pendente (`[09:18] Diego`, `[09:18] Bruno`, `[09:19] Larissa`, `[09:35] Diego`, `[09:35] Larissa`).
+- **Replay somente para ADMIN:** o replay exige role `ADMIN` e deve registrar o administrador solicitante (`[09:35] Larissa`, `[09:36] Sofia`, `[09:36] Larissa`, `[09:49] Sofia`).
+
+#### Segurança e autorização
+- **HMAC-SHA256:** assinar o corpo do request com algoritmo padrão de mercado e enviar a assinatura em `X-Signature` (`[09:19] Sofia`, `[09:20] Sofia`, `[09:20] Bruno`, `[09:20] Sofia`).
+- **Secret por endpoint:** cada webhook possui secret exclusiva, não uma secret global (`[09:21] Sofia`, `[09:21] Bruno`, `[09:21] Sofia`).
+- **Rotação:** secret anterior permanece válida em paralelo por 24 horas após a rotação (`[09:21] Sofia`, `[09:22] Diego`, `[09:22] Sofia`, `[09:22] Larissa`).
+- **HTTPS obrigatório:** URL HTTP é recusada por validação Zod (`[09:23] Sofia`).
+- **Customer_id no recurso:** não vem do JWT; o body ou path informa o cliente do recurso (`[09:31] Marcos`, `[09:32] Bruno`, `[09:32] Marcos`, `[09:32] Larissa`).
+- **Lacuna de autorização por cliente:** a reunião não define a associação usuário-cliente nem o vínculo efetivo para impedir acesso cruzado (`[09:32] Larissa`, `[09:36] Marcos`, `[09:37] Sofia`).
+- **Revisão de segurança:** reservar pelo menos dois dias úteis para HMAC e geração/armazenamento de secrets antes do deploy (`[09:46] Sofia`, `[09:47] Larissa`, `[09:49] Sofia`).
+
+#### Fora de escopo e riscos
+- **E-mail de falha:** fora desta fase; possível avaliação futura após medir impacto (`[09:37] Larissa`, `[09:37] Marcos`, `[09:38] Marcos`).
+- **Rate limiting de saída:** fora desta fase; observar volume e decidir posteriormente (`[09:38] Diego`, `[09:39] Larissa`, `[09:39] Diego`).
+- **Dashboard/painel visual:** fora desta fase; o frontend atende via endpoints da API (`[09:39] Marcos`, `[09:40] Larissa`, `[09:40] Marcos`).
+- **Arquivamento após 30 dias:** citado como fora do escopo da feature (`[09:08] Diego`).
+- **Ordens futuras e múltiplos workers:** escalabilidade paralela fica para o futuro; não há garantia de ordenação global (`[09:12] Diego`, `[09:13] Bruno`, `[09:13] Diego`, `[09:13] Larissa`).
+- **Prazo estimado:** três sprints, incluindo a revisão de segurança, com prazo ainda sujeito à confirmação dos responsáveis (`[09:45] Marcos`, `[09:46] Larissa`, `[09:46] Sofia`, `[09:47] Larissa`).
 
 **Divergência de prazo a confirmar:** a transcrição registra que Atlas queria entrega até o fim de novembro e a estimativa discutida foi de três sprints ([TRANSCRICAO.md](../../TRANSCRICAO.md#L270-L277)); o PRD resume o risco como “até o fim do trimestre”. Este RFC não escolhe um prazo como compromisso aprovado.
 
