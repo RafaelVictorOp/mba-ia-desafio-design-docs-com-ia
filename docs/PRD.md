@@ -62,11 +62,92 @@ Incluso
 - Reuso dos padrões existentes do projeto para módulos, validação, erros, logging, autenticação e autorização por role.
 
 Fora de escopo
-- Envio de e-mail para avisar clientes sobre falhas.
-- Dashboard visual para clientes; nesta fase serão oferecidos endpoints de API.
-- Rate limiting de saída por cliente; o volume será observado e a necessidade avaliada posteriormente, sem implementar controle de taxa nesta fase.
-- Garantia de ordenação global ou paralelismo de múltiplos workers na primeira versão.
-- Arquivamento de registros entregues após 30 dias.
+- Envio de e-mail para avisar clientes sobre falhas (`[09:37] Larissa`, `[09:38] Marcos`).
+- Dashboard visual para clientes; nesta fase serão oferecidos endpoints de API (`[09:39] Marcos`, `[09:40] Larissa`).
+- Rate limiting de saída por cliente; o volume será observado e a necessidade avaliada posteriormente, sem implementar controle de taxa nesta fase (`[09:38] Diego`, `[09:39] Larissa`).
+- Garantia de ordenação global ou paralelismo de múltiplos workers na primeira versão (`[09:12] Diego`, `[09:13] Larissa`).
+- Arquivamento de registros entregues após 30 dias (`[09:08] Diego`).
+- Webhooks inbound (cliente para a plataforma), pois o escopo é exclusivamente outbound (`[09:02] Sofia`, `[09:02] Marcos`).
+
+---
+
+### Rastreabilidade temporal da transcrição
+
+Os momentos abaixo registram exatamente quando cada assunto foi abordado na reunião. Quando houver mais de um ponto relevante para o mesmo item, todos os timestamps literais da transcrição são preservados.
+
+#### Contexto, objetivos e escopo
+- **Proposta dos clientes B2B e motivo do problema:** pedidos da Atlas Comercial, MaxDistribuição e Nova Cargo e consulta repetitiva a `GET /orders` (`[09:00] Marcos`).
+- **Risco comercial da Atlas Comercial:** migração para concorrente se a entrega não ocorrer até o fim do trimestre (`[09:00] Marcos`).
+- **Critério de tempo real:** menos de 10 segundos é aceitável para os clientes (`[09:02] Marcos`).
+- **Escopo outbound:** o OMS envia aos clientes; não recebe webhooks deles (`[09:02] Sofia`, `[09:02] Marcos`, `[09:03] Sofia`).
+- **Prazo comercial:** entrega desejada para a Atlas até o fim de novembro (`[09:45] Marcos`, `[09:47] Larissa`).
+
+#### Arquitetura e integridade
+- **Descartar chamada síncrona:** não executar HTTP durante a mudança de status, pois clientes lentos ou indisponíveis poderiam travar pedidos (`[09:03] Larissa`, `[09:04] Bruno`, `[09:04] Larissa`, `[09:05] Larissa`).
+- **Decisão pelo padrão outbox:** persistir evento na mesma transação da mudança de status (`[09:06] Diego`, `[09:06] Bruno`, `[09:06] Diego`).
+- **Descartar Redis Streams:** evitar nova infraestrutura; usar o MySQL existente (`[09:07] Larissa`, `[09:07] Diego`).
+- **Estrutura da outbox:** índice por status e `created_at`, batch pequeno e marcação de entregue (`[09:08] Diego`).
+- **Polling a cada 2 segundos:** decisão e justificativa sobre reatividade e trigger (`[09:08] Larissa`, `[09:09] Diego`, `[09:09] Bruno`, `[09:09] Diego`, `[09:10] Marcos`, `[09:10] Larissa`).
+- **Worker em processo separado:** independência do ciclo de vida da API (`[09:11] Diego`, `[09:11] Larissa`, `[09:11] Bruno`, `[09:11] Diego`).
+- **Entry point e comando:** entrada proposta em `src/worker.ts` e script `npm run worker` (`[09:11] Larissa`, `[09:28] Bruno`, `[09:28] Diego`).
+- **Single-worker e ordenação:** ordem por `created_at`, ausência de garantia global e escala futura fora da primeira versão (`[09:12] Larissa`, `[09:12] Diego`, `[09:13] Bruno`, `[09:13] Diego`, `[09:13] Larissa`, `[09:14] Marcos`, `[09:14] Larissa`).
+- **Atomicidade no fluxo de pedidos:** pedido, histórico, estoque e outbox na mesma transação, com rollback da outbox revertendo tudo (`[09:40] Bruno`, `[09:41] Diego`, `[09:41] Bruno`, `[09:41] Diego`).
+- **Snapshot do payload:** o evento guarda o payload renderizado na inserção, não valores posteriores do pedido (`[09:51] Diego`, `[09:51] Larissa`, `[09:51] Diego`, `[09:51] Bruno`, `[09:52] Larissa`, `[09:52] Diego`, `[09:52] Bruno`).
+- **UUID da outbox:** confirmação de uso de UUID, no mesmo padrão do restante do projeto (`[09:51] Diego`, `[09:51] Larissa`).
+
+#### Requisitos funcionais
+- **FR-001 Gerenciar configurações:** cadastro, edição, remoção e listagem por cliente (`[09:31] Marcos`, `[09:32] Marcos`, `[09:33] Bruno`, `[09:33] Marcos`).
+- **FR-001 Campos e geração da secret:** URL, status, secret gerada pela plataforma e devolvida na criação (`[09:31] Marcos`, `[09:32] Bruno`, `[09:32] Marcos`).
+- **FR-001 Associação por customer_id:** `customer_id` no body ou path, não inferido diretamente do JWT (`[09:32] Bruno`, `[09:32] Marcos`, `[09:32] Larissa`).
+- **FR-002 Filtragem por status:** filtrar na inserção da outbox apenas endpoints ativos inscritos no status de destino (`[09:33] Marcos`, `[09:34] Diego`, `[09:34] Bruno`, `[09:34] Diego`).
+- **FR-003 Atomicidade e rollback:** persistir o evento elegível junto com a alteração de status (`[09:06] Diego`, `[09:40] Bruno`, `[09:41] Diego`).
+- **FR-004 Worker e entrega:** worker separado, polling, POST HTTPS, batching e registro do resultado (`[09:08] Diego`, `[09:09] Diego`, `[09:11] Diego`, `[09:28] Bruno`).
+- **FR-004 Timeout:** chamadas sem resposta em 10 segundos são consideradas falha (`[09:42] Sofia`, `[09:42] Diego`, `[09:42] Sofia`).
+- **FR-004 Payload limit:** rejeitar payload acima de 64 KB sem truncamento (`[09:23] Sofia`, `[09:23] Diego`, `[09:24] Larissa`, `[09:24] Diego`).
+- **FR-005 HMAC-SHA256:** assinatura do payload com secret compartilhada e header `X-Signature` (`[09:19] Sofia`, `[09:20] Sofia`, `[09:20] Bruno`, `[09:20] Sofia`).
+- **FR-005 Secret exclusiva por endpoint:** não usar secret global (`[09:21] Sofia`, `[09:21] Bruno`, `[09:21] Sofia`).
+- **FR-005 Rotação:** a secret antiga continua válida por 24 horas após a rotação (`[09:21] Sofia`, `[09:22] Diego`, `[09:22] Sofia`, `[09:22] Larissa`).
+- **FR-005 HTTPS obrigatório:** URL HTTP recusada como validação no schema Zod (`[09:23] Sofia`).
+- **FR-006 Retentativas:** cinco tentativas com backoff e intervalos de 1 minuto, 5 minutos, 30 minutos, 2 horas e 12 horas (`[09:14] Larissa`, `[09:15] Diego`, `[09:15] Bruno`, `[09:15] Diego`, `[09:16] Bruno`, `[09:16] Diego`, `[09:16] Larissa`, `[09:17] Diego`, `[09:17] Marcos`, `[09:17] Larissa`).
+- **Interpretação da contagem:** cinco tentativas adicionais após a tentativa inicial (`[09:48] Larissa`); a transcrição não esclarece diretamente se a inicial integra o teto.
+- **FR-006 DLQ:** tabela separada preservando payload, motivo da falha e timestamp (`[09:17] Larissa`, `[09:18] Diego`, `[09:18] Bruno`, `[09:18] Diego`).
+- **FR-007 Histórico de entregas:** até 100 entregas com status, payload, resposta e tempo de resposta (`[09:34] Marcos`, `[09:35] Larissa`).
+- **FR-007 Contrato de consulta:** `GET /webhooks/:id/deliveries` (`[09:34] Marcos`, `[09:35] Larissa`).
+- **FR-008 Replay da DLQ:** `POST /admin/webhooks/dead-letter/:id/replay`, recolocando o evento na outbox como pendente (`[09:18] Diego`, `[09:18] Bruno`, `[09:18] Diego`, `[09:19] Larissa`, `[09:35] Diego`, `[09:35] Larissa`).
+- **FR-008 Role administrativa:** replay exige role `ADMIN` e deve registrar quem realizou a ação (`[09:35] Larissa`, `[09:36] Sofia`, `[09:36] Larissa`).
+- **FR-009 Worker separado:** entrada própria, mesmo banco e instância Prisma própria por processo (`[09:11] Diego`, `[09:11] Larissa`, `[09:11] Bruno`, `[09:11] Diego`, `[09:28] Bruno`, `[09:29] Diego`, `[09:30] Bruno`).
+
+#### Contrato de entrega e semântica
+- **At-least-once:** duplicatas podem ocorrer; exatamente uma vez foi descartado por complexidade (`[09:24] Diego`, `[09:25] Bruno`, `[09:25] Diego`, `[09:25] Sofia`, `[09:25] Diego`, `[09:26] Marcos`, `[09:26] Larissa`).
+- **`X-Event-Id`:** UUID gerado na outbox para deduplicação no cliente (`[09:24] Diego`, `[09:25] Bruno`, `[09:25] Diego`, `[09:26] Larissa`).
+- **Payload:** `event_id`, `event_type`, timestamp ISO 8601, `order_id`, `order_number`, `from_status`, `to_status`, `customer_id`, `total_cents`; sem itens (`[09:43] Marcos`, `[09:43] Diego`, `[09:44] Bruno`).
+- **Headers:** `X-Event-Id`, `X-Signature`, `X-Timestamp`, `Content-Type: application/json` e `X-Webhook-Id` (`[09:44] Diego`, `[09:44] Sofia`, `[09:45] Diego`).
+- **Timestamp do request:** permitir ao cliente detectar replay attacks antigos (`[09:44] Diego`).
+
+#### Padrões do projeto e arquitetura de código
+- **Padrão de módulos:** `src/modules/webhooks` com controller, service, repository, routes e schemas (`[09:27] Larissa`, `[09:27] Bruno`, `[09:28] Diego`, `[09:28] Bruno`).
+- **Padrões compartilhados:** AppError, Pino, middleware centralizado de erros, Zod e códigos prefixados `WEBHOOK_` (`[09:28] Bruno`, `[09:29] Larissa`, `[09:29] Bruno`, `[09:29] Diego`, `[09:30] Larissa`).
+- **Prisma separado no worker:** mesmo banco e `DATABASE_URL`, mas nova instância por processo (`[09:29] Diego`, `[09:30] Bruno`, `[09:30] Larissa`).
+
+#### Segurança, autorização e revisão
+- **TLS obrigatório:** somente HTTPS para endpoints cadastrados (`[09:23] Sofia`).
+- **Não registrar secrets em logs:** compromisso de controle mencionado para revisão de segurança (`[09:49] Sofia`, `[09:49] Larissa`).
+- **JWT e associação de cliente:** CRUD autenticado, `customer_id` fornecido na requisição e vínculo usuário-cliente pendente (`[09:31] Marcos`, `[09:32] Bruno`, `[09:32] Marcos`, `[09:32] Larissa`, `[09:36] Marcos`, `[09:36] Sofia`, `[09:37] Sofia`).
+- **Roles:** replay restrito a `ADMIN`; demais CRUDs por usuário autenticado, sem endurecimento definido nesta fase (`[09:35] Larissa`, `[09:36] Sofia`, `[09:36] Larissa`, `[09:36] Marcos`, `[09:37] Sofia`).
+- **Revisão de segurança:** reservar pelo menos dois dias úteis antes do deploy, inclusive para HMAC e geração de secret (`[09:46] Sofia`, `[09:47] Larissa`, `[09:49] Sofia`).
+
+#### Riscos e limitações
+- **Endpoint indisponível ou lento:** timeout, retries, DLQ e replay como mitigação (`[09:14] Larissa`, `[09:15] Diego`, `[09:42] Diego`, `[09:18] Diego`).
+- **Duplicidade:** impacto mitigado pela deduplicação do cliente (`[09:24] Diego`, `[09:25] Diego`, `[09:26] Larissa`).
+- **Ordenação:** single-worker oferece expectativa por `order_id`, não garantia global (`[09:12] Diego`, `[09:13] Diego`, `[09:13] Larissa`, `[09:14] Larissa`).
+- **Acesso entre clientes:** lacuna de autorização a ser definida antes do deploy (`[09:32] Larissa`, `[09:36] Marcos`, `[09:37] Sofia`).
+- **Vazamento anterior de secret:** exposição em log de cliente motivou secret por endpoint e rotação com grace period (`[09:22] Diego`, `[09:22] Sofia`).
+- **Rate limiting:** exemplo de 50 mudanças em um minuto e decisão de observar o volume antes de implementar controle (`[09:38] Diego`, `[09:39] Larissa`).
+
+#### Planejamento e validação
+- **Estimativa:** três sprints, incluindo revisão de segurança (`[09:45] Marcos`, `[09:46] Larissa`, `[09:46] Sofia`, `[09:47] Larissa`, `[09:47] Marcos`).
+- **Testes:** unitários e integração para regras de negócio, transações e rollback (`[09:40] Bruno`, `[09:41] Bruno`, `[09:50] Larissa`).
+- **Fechamento da reunião:** decisões confirmadas por Diego, Bruno e Sofia (`[09:49] Diego`, `[09:49] Bruno`, `[09:49] Sofia`, `[09:53] Diego`, `[09:53] Bruno`, `[09:53] Larissa`).
 
 ---
 

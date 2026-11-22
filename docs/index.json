@@ -1,0 +1,256 @@
+{
+  "feature": [
+    {
+      "type": "ADR",
+      "path": "docs\\adrs\\ADR-018-outbox-mysql-worker-polling.md",
+      "title": "ADR-018: Registrar eventos em outbox MySQL e entregá-los por worker separado"
+    },
+    {
+      "type": "ADR",
+      "path": "docs\\adrs\\ADR-019-assinatura-hmac-por-endpoint.md",
+      "title": "ADR-019: Assinatura HMAC e ciclo de vida de secrets por endpoint"
+    },
+    {
+      "type": "ADR",
+      "path": "docs\\adrs\\ADR-020-entrega-at-least-once-com-event-id.md",
+      "title": "ADR-020: Usar entrega at-least-once com identidade estável do evento"
+    },
+    {
+      "type": "ADR",
+      "path": "docs\\adrs\\ADR-021-autorizacao-por-vinculo-usuario-cliente.md",
+      "title": "ADR-021: Autorizar a gestão de webhooks pelo vínculo usuário-cliente"
+    },
+    {
+      "type": "ADR",
+      "path": "docs\\adrs\\ADR-022-soft-delete-e-cancelamento-de-entregas.md",
+      "title": "ADR-022: Preservar webhooks excluídos e cancelar entregas não reservadas"
+    },
+    {
+      "type": "ADR",
+      "path": "docs\\adrs\\ADR-023-classificar-payload-excedente-na-criacao.md",
+      "title": "ADR-023: Classificar payload excedente na criação do evento"
+    },
+    {
+      "type": "ADR",
+      "path": "docs\\adrs\\ADR-025-identidade-de-evento-e-tentativa-no-replay.md",
+      "title": "ADR-025: Preservar a identidade do evento e criar identidade por tentativa no replay"
+    },
+    {
+      "type": "OTHER",
+      "path": "docs\\adrs\\README.md",
+      "title": "Architectural Decision Records"
+    },
+    {
+      "type": "FDD",
+      "path": "docs\\FDD.md",
+      "title": "FDD — Feature Design Document"
+    },
+    {
+      "type": "PRD",
+      "path": "docs\\PRD.md",
+      "title": "PRD: Order Management System Sistema de Webhooks de Notificação de Pedidos"
+    },
+    {
+      "type": "RFC",
+      "path": "docs\\RFC.md",
+      "title": "RFC: Webhooks de saída para mudanças de status de pedidos"
+    },
+    {
+      "type": "OTHER",
+      "path": "docs\\TRACKABILITY_COVERAGE.md",
+      "title": "Cobertura de Rastreabilidade"
+    },
+    {
+      "type": "OTHER",
+      "path": "docs\\TRACKER.md",
+      "title": null
+    }
+  ],
+  "system": [
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\generated\\API\\ADR-010-express-como-framework-principal.md",
+      "title": "ADR-010: Express como framework principal da aplicação HTTP"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\generated\\API\\ADR-011-api-rest-versionada.md",
+      "title": "ADR-011: API HTTP REST versionada em `/api/v1`"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\generated\\AUTH\\ADR-006-estrategia-de-autenticacao-local-com-jwt.md",
+      "title": "ADR-006: Estratégia de autenticação local com JWT"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\generated\\CUSTOMERS\\ADR-012-mysql-para-dados-de-clientes.md",
+      "title": "ADR-012: MySQL para dados de clientes"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\generated\\CUSTOMERS\\ADR-013-express-para-api-de-clientes.md",
+      "title": "ADR-013: Express para a API de clientes"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\generated\\CUSTOMERS\\ADR-014-prisma-para-dados-de-clientes.md",
+      "title": "Contexto e Declaração do Problema"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\generated\\CUSTOMERS\\ADR-015-api-rest-para-clientes.md",
+      "title": "ADR-015: API REST para clientes"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\generated\\DATA\\ADR-016-mysql-como-banco-relacional.md",
+      "title": "ADR-016: MySQL como banco relacional"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\generated\\DATA\\ADR-017-prisma-como-orm.md",
+      "title": "ADR-017: Prisma como ORM e camada de acesso a dados"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\generated\\ORDERS\\ADR-007-prisma-como-orm-em-pedidos.md",
+      "title": "ADR-007: Prisma como ORM em pedidos"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\generated\\ORDERS\\ADR-008-express-como-framework-em-pedidos.md",
+      "title": "ADR-008: Express como framework HTTP em Pedidos"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\generated\\ORDERS\\ADR-009-api-rest-em-pedidos.md",
+      "title": "ADR-009: API HTTP em estilo REST no módulo de pedidos"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\generated\\PLATFORM\\ADR-001-autenticacao-de-requisicoes-com-jwt.md",
+      "title": "ADR-001: Autenticação de requisições com JWT"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\generated\\PRODUCTS\\ADR-003-express-como-framework-http.md",
+      "title": "ADR-003: Express como framework HTTP do módulo PRODUCTS"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\generated\\PRODUCTS\\ADR-004-api-rest-para-catalogo-de-produtos.md",
+      "title": "ADR-004: API REST para o catálogo de produtos"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\generated\\PRODUCTS\\ADR-005-prisma-como-camada-de-dados-de-produtos.md",
+      "title": "ADR-005: Prisma como camada de dados de produtos"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\generated\\USERS\\ADR-002-hash-de-senhas-com-bcrypt.md",
+      "title": "ADR-002: Hash de senhas com bcrypt"
+    },
+    {
+      "type": "OTHER",
+      "path": "docs_oms\\adrs_encontrados\\mapping.md",
+      "title": "Mapeamento da arquitetura da base de código"
+    },
+    {
+      "type": "OTHER",
+      "path": "docs_oms\\adrs_encontrados\\potential-adrs-index.md",
+      "title": "Índice de potenciais ADRs"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\potential-adrs\\API\\api-rest-versionada.md",
+      "title": "Potencial ADR: API HTTP REST versionada sob `/api/v1`"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\potential-adrs\\API\\express-como-framework-principal.md",
+      "title": "Potencial ADR: Express como framework principal da aplicação HTTP"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\potential-adrs\\AUTH\\estrategia-de-autenticacao-local-jwt.md",
+      "title": "Potencial ADR: Estratégia de autenticação local com bcrypt e JWT Bearer"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\potential-adrs\\CUSTOMERS\\api-rest-clientes.md",
+      "title": "Potencial ADR: Expor operações de clientes por uma API REST"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\potential-adrs\\CUSTOMERS\\banco-de-dados-mysql.md",
+      "title": "Potencial ADR: Persistir os dados de clientes em MySQL"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\potential-adrs\\CUSTOMERS\\camada-de-acesso-a-dados-prisma.md",
+      "title": "Potencial ADR: Usar Prisma como camada de acesso a dados de clientes"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\potential-adrs\\CUSTOMERS\\framework-express.md",
+      "title": "Potencial ADR: Estruturar a API de clientes com Express"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\potential-adrs\\DATA\\banco-relacional-mysql.md",
+      "title": "Potencial ADR: Uso do MySQL como banco relacional da aplicação"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\potential-adrs\\DATA\\orm-prisma.md",
+      "title": "Potencial ADR: Uso do Prisma como ORM e camada de acesso a dados"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\potential-adrs\\ORDERS\\api-rest-orders.md",
+      "title": "Potencial ADR: API HTTP em estilo REST no módulo ORDERS"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\potential-adrs\\ORDERS\\express-framework-orders.md",
+      "title": "Potencial ADR: Express como framework HTTP no módulo ORDERS"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\potential-adrs\\ORDERS\\prisma-orm-orders.md",
+      "title": "Potencial ADR: Prisma como ORM no módulo ORDERS"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\potential-adrs\\PLATFORM\\autenticacao-jwt-bearer.md",
+      "title": "Potencial ADR: Autenticação de requisições com JWT Bearer"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\potential-adrs\\PRODUCTS\\api-rest-para-catalogo-produtos.md",
+      "title": "Potencial ADR: API REST para o catálogo de produtos"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\potential-adrs\\PRODUCTS\\express-como-framework-http-do-modulo.md",
+      "title": "Potencial ADR: Uso do Express como framework HTTP no módulo PRODUCTS"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\potential-adrs\\PRODUCTS\\prisma-como-camada-de-acesso-a-dados.md",
+      "title": "Potencial ADR: Prisma como camada de acesso a dados de produtos"
+    },
+    {
+      "type": "ADR",
+      "path": "docs_oms\\adrs_encontrados\\potential-adrs\\USERS\\hash-de-senhas-com-bcrypt.md",
+      "title": "Potencial ADR: Hash de senhas com bcrypt no ciclo de vida de usuários"
+    },
+    {
+      "type": "HLD",
+      "path": "docs_oms\\HLD_SISTEMA.md",
+      "title": "HLD: Order Management System"
+    }
+  ]
+}

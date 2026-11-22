@@ -13,17 +13,17 @@
 
 Este RFC propõe adicionar webhooks outbound ao OMS para informar clientes B2B sobre mudanças elegíveis de status de pedidos. A proposta usa Transactional Outbox no MySQL existente, um worker Node.js separado, entrega HTTPS assíncrona, assinatura HMAC-SHA256 e semântica at-least-once. O escopo e as decisões de produto/técnicas originalmente acordadas estão descritos no PRD e na transcrição; este RFC incorpora as diretrizes adicionais informadas pelo usuário durante sua elaboração.
 
-A proposta recomendada provisoriamente preserva o estilo modular e os mecanismos existentes. Para autorização, este RFC define como fonte de verdade uma relação persistida `CustomerMembership` no MySQL, consultada em cada operação com a identidade do JWT e o cliente do recurso; concessões e revogações devem ocorrer por provisionamento administrativo confiável, sem autoassociação. A relação ainda precisa ser implementada e a proposta aprovada formalmente. Também são propostas o soft delete dos webhooks com cancelamento de eventos ainda não iniciados e a classificação imediata de payloads acima de 65.536 bytes como falha permanente em DLQ. O replay conserva o `event_id` de negócio, cria identificador independente por tentativa e recalcula a assinatura usando a secret ativa no instante do envio.
+A proposta recomendada provisoriamente preserva o estilo modular e os mecanismos existentes. Para autorização, este RFC define como fonte de verdade uma relação persistida `CustomerMembership` no MySQL, consultada em cada operação com a identidade do JWT e o cliente do recurso; concessões e revogações devem ocorrer por provisionamento administrativo confiável, sem autoassociação. A relação ainda precisa ser implementada e a proposta aprovada formalmente. Também são propostas o soft delete dos webhooks com cancelamento de entregas ainda não reservadas para despacho e a classificação imediata de payloads acima de 65.536 bytes como falha permanente em DLQ. `DISPATCHING` representa a reserva irrevogável do despacho, não a confirmação de que bytes já foram enviados: uma exclusão posterior não cancela essa entrega, que ainda pode iniciar ou concluir após o soft delete. O replay conserva o `event_id` de negócio, cria identificador independente por tentativa e recalcula a assinatura usando a secret ativa no instante do envio.
 
 O documento não afirma que a feature esteja implementada nem que a proposta tenha sido aceita formalmente pela equipe. O status permanece `Draft`. A recomendação não substitui a decisão formal dos revisores.
 
 ## 2. Contexto e problema
 
-**Informado na transcrição:** três clientes B2B pediram notificações sobre mudanças de status; atualmente consultam `GET /orders` repetidamente, o que torna suas integrações mais lentas e caras. Foi relatado risco comercial ligado ao prazo de atendimento. A reunião rejeitou chamadas HTTP síncronas no fluxo de atualização, pois a indisponibilidade de endpoints externos não deve bloquear a operação de pedidos ([TRANSCRICAO.md](../../TRANSCRICAO.md#L1-L40)).
+**Informado na transcrição:** três clientes B2B pediram notificações sobre mudanças de status; atualmente consultam `GET /orders` repetidamente, o que torna suas integrações mais lentas e caras (`[09:00] Marcos`). Foi relatado risco comercial ligado ao prazo de atendimento (`[09:00] Marcos`). A reunião rejeitou chamadas HTTP síncronas no fluxo de atualização, pois a indisponibilidade de endpoints externos não deve bloquear a operação de pedidos (`[09:03] Larissa`, `[09:04] Bruno`, `[09:05] Larissa`). ([TRANSCRICAO.md](../../TRANSCRICAO.md))
 
 **Confirmado no código:** `OrderService.changeStatus()` já opera numa transação Prisma que atualiza status, grava histórico e pode debitar ou repor estoque ([order.service.ts](../../src/modules/orders/order.service.ts#L126-L171)). O schema Prisma define MySQL e não contém modelos de webhook, outbox, histórico de entrega ou DLQ ([schema.prisma](../../prisma/schema.prisma#L1-L25)). A integração de webhook é, portanto, futura.
 
-A solução precisa preservar a atomicidade entre mudança do pedido e registro do evento, desacoplar latência de terceiros, permitir diagnóstico e replay controlado, e evitar acesso cruzado entre clientes. O tempo inferior a 10 segundos é objetivo para operação normal, não SLA garantido; backlog, indisponibilidade, retentativas e duração do processamento podem excedê-lo ([PRD.md](../PRD.md), seções “Objetivos e métricas” e “Requisitos não funcionais”).
+A solução precisa preservar a atomicidade entre mudança do pedido e registro do evento, desacoplar latência de terceiros, permitir diagnóstico e replay controlado, e evitar acesso cruzado entre clientes. O tempo inferior a 10 segundos é objetivo para operação normal, não SLA garantido; backlog, indisponibilidade, retentativas e duração do processamento podem excedê-lo (`[09:02] Marcos`, `[09:09] Diego`, `[09:10] Larissa`) ([PRD.md](../PRD.md), seções “Objetivos e métricas” e “Requisitos não funcionais”).
 
 ## 3. Objetivos
 
@@ -64,12 +64,13 @@ A solução precisa preservar a atomicidade entre mudança do pedido e registro 
 3. Replay manual é restrito a `ADMIN`, com auditoria do administrador e resultado da operação.
 4. Cada mudança elegível produz snapshot JSON com UUID imutável de negócio e evento por endpoint inscrito.
 5. A entrega é at-least-once. Cada tentativa possui identificador próprio (`attempt_id`/`delivery_id`); todas reutilizam o `event_id` original em `X-Event-Id`.
-6. O worker verifica estado ativo antes de começar envio. Soft delete registra `deleted_at` e, quando disponível, `deleted_by`; impede novas inserções e cancela eventos pendentes/em retry com status `CANCELLED`. Entregas concluídas e DLQ permanecem para auditoria; DLQ não pode ser reproduzida enquanto o webhook está excluído.
-7. Um HTTP já iniciado pode concluir. Eventos ainda não despachados devem ser cancelados. A coordenação concorrente entre exclusão e despacho é descrita na seção 12.
+6. O worker verifica estado ativo atomicamente ao reservar o despacho. Soft delete registra `deleted_at` e, quando disponível, `deleted_by`; impede novas inserções e cancela eventos pendentes/em retry que ainda não estejam em `DISPATCHING`, marcando-os `CANCELLED`. Entregas concluídas e DLQ permanecem para auditoria; DLQ não pode ser reproduzida enquanto o webhook está excluído.
+7. `DISPATCHING` é o ponto de não cancelamento da entrega, não uma afirmação de que a conexão foi aberta ou de que algum byte foi enviado. Se a reserva ocorrer antes da exclusão, a entrega pode iniciar ou concluir mesmo que o soft delete seja confirmado antes da abertura da conexão. A coordenação concorrente é descrita na seção 12.
 8. O limite é 65.536 bytes da serialização JSON em UTF-8. Excesso é falha permanente `WEBHOOK_PAYLOAD_TOO_LARGE`, sem HTTP, truncamento, fragmentação ou retry, e deve ser persistido na DLQ com payload original, `event_id`, tamanho observado, limite, motivo e timestamp.
 9. Replay valida novamente ativo e tamanho. Excesso mantém o item na DLQ e a API retorna `WEBHOOK_PAYLOAD_TOO_LARGE`.
-10. Rotação gera secret nova exclusiva e torna-a ativa imediatamente para todos os envios novos, inclusive retries de eventos antigos. A secret anterior fica válida para verificação do destinatário durante 24 horas e é então invalidada. Comprometimento requer revogação imediata, sem janela de graça.
+10. A rotação normal tem como **proposta deste RFC**, não como decisão da reunião, ativar imediatamente a nova secret para todos os envios e retries. A reunião estabelece apenas que o consumidor pode verificar a secret anterior por até 24 horas. Ela não define revogação emergencial nem período de graça.
 11. `X-Timestamp` representa a tentativa atual; timestamp/evento no corpo e payload snapshot não mudam no replay. HMAC é recalculado no envio com a secret ativa.
+12. Se houver revogação emergencial, a política de autorização proposta é exigir usuário autenticado `ADMIN` via `authenticate` e `requireRole('ADMIN')`. Isso aplica por extensão o precedente da reunião para replay sensível ([TRANSCRICAO.md](../TRANSCRICAO.md#L172-L214)); a reunião não decidiu especificamente a revogação emergencial. Período de graça, credencial substituta e requests em voo permanecem sem definição.
 
 ### Restrições e objetivos quantitativos
 
@@ -82,7 +83,7 @@ A solução precisa preservar a atomicidade entre mudança do pedido e registro 
 
 ### Classificação das afirmações
 
-Os requisitos-base acima são **Informados no PRD/transcrição** ou **Confirmados no código**, conforme referências. O modelo `CustomerMembership`, sua consulta por operação e seu provisionamento administrativo, assim como as políticas de rotação imediata, soft delete, DLQ para payload excessivo, identidade do replay e identificador por tentativa, são **diretrizes adotadas para esta proposta durante esta elaboração**; não aparecem como decisões na transcrição original nem como implementação no código. Portanto, descrevem o To-Be proposto, não comportamento existente nem aprovação formal.
+Os requisitos-base acima são **Informados no PRD/transcrição** ou **Confirmados no código**, conforme referências. A ativação imediata é uma proposta deste RFC; a reunião confirma a janela de verificação paralela de 24 horas, mas não o momento de ativação pelo remetente. A restrição ADMIN para revogação emergencial é uma extensão proposta do precedente de autorização sensível para replay, não uma decisão expressa da reunião. Período de graça, divulgação única, política de leitura da secret e requests em voo não são decisões tomadas na reunião e permanecem em aberto. As propostas de `CustomerMembership`, soft delete, DLQ para payload excessivo, identidade do replay e identificador por tentativa também não são comportamento existente nem aprovação formal do RFC.
 
 ## 7. Proposta técnica (To-Be)
 
@@ -112,8 +113,8 @@ sequenceDiagram
         API->>DB: Persiste evento e diagnóstico na DLQ (sem lançar erro de tamanho)
     end
     DB-->>API: Commit
-    W->>DB: Poll de eventos pendentes / claim condicional
-    W->>DB: Revalida endpoint ativo e tamanho
+    W->>DB: Poll e claim atômico: PENDING/RETRY -> DISPATCHING se endpoint ativo
+    W->>DB: Valida tamanho antes de abrir conexão
     alt Ativo e dentro do limite
         W->>C: POST HTTPS, HMAC-SHA256, X-Event-Id e X-Timestamp
         C-->>W: Resposta HTTP
@@ -127,13 +128,13 @@ sequenceDiagram
 
 Validar no produtor após formar o JSON snapshot e antes de encaminhar à persistência da entrega, contando os bytes da serialização UTF-8. Para snapshot excedente, gravar diretamente na DLQ na mesma transação que registra a mudança de pedido, com o evento/payload original e diagnóstico; não lançar exceção por `WEBHOOK_PAYLOAD_TOO_LARGE`. O evento não entra no conjunto de entrega/retry e o worker não faz request HTTP. Revalidar também no worker como defesa em profundidade, antes do envio, e no endpoint de replay.
 
-A mudança de tamanho em si não reverte pedido, histórico ou estoque. A persistência de evento/DLQ permanece no limite transacional para impedir perda silenciosa de rastreabilidade. Uma falha de banco ao gravar esse registro continua sendo falha de persistência e pode abortar a transação: isso é distinto do resultado de validação de payload. Se o requisito de negócio também proibir rollback quando a própria persistência da DLQ falhar, será necessário decidir entre uma estratégia durável alternativa (por exemplo, gravar o evento válido na outbox e promover a DLQ assincronamente) e aceitar consistência eventual; isso não está confirmado.
+A mudança de tamanho em si não reverte pedido, histórico ou estoque. A persistência de evento/DLQ permanece no limite transacional para impedir perda silenciosa de rastreabilidade. Uma falha real de banco ao gravar esse registro aborta a transação, como qualquer falha de persistência coberta pela garantia de atomicidade. Não será usada outbox intermediária com promoção assíncrona.
 
 ### Rotação e entrega
 
-A operação autenticada e autorizada gera a secret nova e atualiza atomicamente a secret ativa. Novas entregas e retries carregam a secret ativa no momento em que o request é construído, nunca uma secret congelada no snapshot. O receptor deve aceitar assinaturas da secret nova e, por até 24 horas, da anterior. A plataforma não consegue controlar o lado receptor; pode retornar a secret nova uma única vez e orientar o cliente a instalá-la antes de solicitar rotação. A ativação imediata implica possível falha de entrega se o consumidor ainda não tiver configurado a nova secret.
+O comportamento proposto para rotação normal é gerar uma secret nova e ativá-la imediatamente para novos envios e retries, sem congelar a credencial no snapshot. A reunião técnica confirma que o consumidor pode verificar com a secret anterior por 24 horas, mas não especifica o instante de ativação no remetente. A reunião confirma que a secret é devolvida na criação; não define o formato de resposta da rotação nem se o valor poderá ser consultado depois. A ativação imediata, se adotada, pode causar falha de entrega se o consumidor ainda não estiver configurado para a nova secret.
 
-Para comprometimento, propõe-se uma ação explícita de revogação emergencial que invalida a secret antiga imediatamente e requer ou ativa uma nova secret sem período de sobreposição. Nome de rota, autorização, semântica de requests já iniciados e entrega da secret de substituição serão definidos no detalhamento; a capacidade não deve ser confundida com a rotação normal de 24 horas.
+Se a revogação emergencial for adotada, restringir a operação a `ADMIN` por `authenticate` e `requireRole('ADMIN')`, aplicando por extensão o precedente da reunião para replay manual da DLQ ([TRANSCRICAO.md](../TRANSCRICAO.md#L172-L214)). A reunião não define a existência/contrato da revogação, período de graça, secret substituta, divulgação do valor ou tratamento de requests já iniciados; esses pontos permanecem pendentes e não devem ser apresentados como decisões tomadas na reunião.
 
 ### Replay e identidade
 
@@ -167,7 +168,7 @@ Replay reusa exatamente o payload snapshot e `event_id` original; não cria novo
 
 ### Rotação
 
-- **Ativação imediata da nova secret (diretriz escolhida).** Reduz o período de uso de uma chave possivelmente comprometida; traz risco de falhas enquanto o receptor não atualiza.
+- **Ativação imediata da nova secret (proposta deste RFC e da seção de rotação da ADR-019, não decisão da reunião).** Reduz o período de uso da chave anterior; traz risco de falhas enquanto o receptor não atualiza.
 - **Ativação após confirmação do receptor ou período de preparação.** Reduz falhas de configuração do destinatário, mas mantém a chave antiga como signatária por mais tempo. Não escolhida para a proposta.
 
 ## 9. Comparação de alternativas e trade-offs
@@ -207,9 +208,9 @@ Replay reusa exatamente o payload snapshot e `event_id` original; não cria novo
 - Verificar vínculo usuário-cliente no servidor para cada CRUD, histórico e rotação; IDs enviados não são credenciais. O replay permanece exclusivamente ADMIN e auditado.
 - A fonte de autorização proposta é `CustomerMembership` no MySQL. A consulta deve confirmar o par `user_id`/`customer_id` e estado ativo em cada operação; falhar fechado quando inexistente/revogado. Concessões e revogações não são self-service e devem ser feitas por fluxo administrativo confiável, com registro do ator e horário.
 - HTTPS obrigatório. A URL é controlada pelo usuário e gera chamada server-side. **Risco inferido a validar na revisão de segurança:** SSRF ou resolução para endereços internos/privados. Avaliar bloqueio de IPs reservados, revalidação DNS no momento do envio, redirects desabilitados ou revalidados, e controles de egress compatíveis com o ambiente; a transcrição/PRD não especifica esses controles.
-- Secrets exclusivas por endpoint, não registrar nos logs, devolver de forma controlada e definir armazenamento protegido em repouso. Criptografia/gestão de segredo não está definida no workspace e deve ser validada sem pressupor serviço de vault já existente.
-- Rotação normal ativa a nova secret imediatamente. Para mitigar falha de entrega pelo receptor desatualizado: retornar a nova secret somente na resposta segura da rotação; instruir o cliente a preparar verificação com chave atual e anterior; disponibilizar aviso/etapa de confirmação antes de solicitar rotação, se compatível com ativação imediata; comunicar que retries usarão a nova secret; expor erros de assinatura/resposta no histórico sem revelar secrets. Isso reduz risco, mas não garante que o receptor foi atualizado.
-- Revogação emergencial invalida sem grace period. A política para requests já iniciados e o mecanismo operacional de distribuição da nova chave precisam ser detalhados.
+- Secrets exclusivas por endpoint são requisito da reunião. Como recomendação de implementação, não registrar seus valores nos logs e definir armazenamento protegido em repouso. A reunião confirma que a secret é devolvida na criação; não define a resposta da rotação nem se a secret pode ser consultada depois. Criptografia/gestão de segredo não está definida no workspace e deve ser validada sem pressupor serviço de vault já existente.
+- A ativação imediata da nova secret é proposta, não regra registrada na reunião. A resposta da rotação e eventual leitura posterior da secret ainda precisam ser decididas; não assumir divulgação única. Mitigações para receptor desatualizado (por exemplo, orientar validação das duas secrets durante a janela) são recomendações, não requisitos acordados.
+- Para uma eventual revogação emergencial, a restrição `ADMIN` é proposta por extensão do precedente do replay sensível. Período de graça, tratamento de requests em andamento e mecanismo de substituição permanecem sem decisão; não presumir que a revogação seja imediata ou sem período de transição.
 
 ### Observabilidade e auditoria
 
@@ -238,9 +239,11 @@ Replay reusa exatamente o payload snapshot e `event_id` original; não cria novo
 
 ### Exclusão versus worker concorrente
 
-A exclusão deve ocorrer em transação: marcar endpoint inativo/soft-deleted, cancelar linhas pendentes e aguardando retry, e impedir novas inserções. O replay bloqueia se endpoint estiver excluído. O worker deve fazer claim condicional da linha apenas se o webhook permanecer ativo; imediatamente antes do HTTP, revalidar o estado.
+A exclusão deve ocorrer em transação: marcar endpoint inativo/soft-deleted, impedir novas inserções e cancelar apenas linhas pendentes ou em retry que ainda não tenham sido reservadas. O replay bloqueia se o webhook estiver excluído. O worker reserva uma entrega por atualização condicional `PENDING`/`RETRY` → `DISPATCHING`, verificando o estado ativo do webhook na mesma operação/transação coordenada com a exclusão.
 
-**Mecanismo proposto para reduzir a corrida:** serializar o início do despacho e a exclusão por lock/atualização condicional no registro do webhook e mudança atômica do estado da entrega (`PENDING`/`RETRY` → `DISPATCHING`). A transação da exclusão bloqueia/atualiza o mesmo registro e cancela tudo que ainda não atingiu `DISPATCHING`. Definir `DISPATCHING` como ponto de linearização para a exceção “requisição iniciada”; após esse ponto a chamada pode concluir e seu resultado fica no histórico. Essa definição operacional deve ser revisada, pois há uma janela pequena entre gravar a reserva e abrir a conexão HTTP. Se o requisito exigir correspondência literal com o primeiro byte enviado, avaliar lock compartilhado mantido até início efetivo do request, medindo custo de lock e timeout; não manter uma transação aberta durante toda a resposta externa. Testes concorrentes devem provar que exclusão commitada primeiro impede despacho posterior.
+**Semântica adotada nesta proposta:** worker e exclusão serializam o claim e a alteração do endpoint pelo mesmo registro/lock. Se a exclusão vencer e confirmar primeiro, os eventos ainda pendentes/em retry são cancelados e o claim falha. Se o claim para `DISPATCHING` vencer e confirmar primeiro, a exclusão subsequente não muda esse estado nem cancela a entrega; o worker pode abrir a conexão depois do commit do soft delete, e a mensagem pode chegar ao cliente. Portanto, `DISPATCHING` significa “despacho reservado e não mais cancelável”, não “requisição efetivamente iniciada na rede”. Não se mantém transação de banco aberta durante a chamada HTTP.
+
+Essa fronteira é deliberadamente operacional: não há garantia de impedir o primeiro byte de rede quando a exclusão é confirmada após o claim. A recuperação de um `DISPATCHING` abandonado por falha do worker deve usar lease/timeout ou mecanismo equivalente definido no FDD; como o resultado externo pode ser desconhecido, uma nova tentativa pode duplicar a entrega. O consumidor deve deduplicar pelo `event_id`, conforme a semântica at-least-once. Testes concorrentes devem cobrir exclusão antes do claim e claim antes da exclusão, incluindo a possibilidade aceita de envio após o soft delete no segundo caso.
 
 ### Rollback
 
@@ -256,15 +259,15 @@ A exclusão deve ocorrer em transação: marcar endpoint inativo/soft-deleted, c
 | --- | --- | --- |
 | Vínculo usuário-cliente ausente no modelo atual | Acesso cruzado ou bloqueio de lançamento | A fonte proposta é `CustomerMembership`; ainda é dependência de implementação. Criar e provisionar a relação por fluxo administrativo, negar vínculo ausente/revogado e testar acesso cruzado; não confiar em `customer_id`. |
 | Cliente ainda não confia na secret nova após rotação | HMAC recusado e retries/DLQ | Aviso e resposta segura na rotação; preparar receptor para duas chaves; telemetria de rejeição; documentar que retries usam chave nova. Não há garantia de atualização remota. |
-| Secret comprometida | Falsificação de evento ao endpoint | Revogação emergencial sem graça, secret exclusiva, HMAC, proteção em repouso e sem logging de valores. Procedimento detalhado pendente. |
-| Corrida soft delete/worker | Envio depois da exclusão ou cancelamento de request já iniciado | Claim condicional e serialização sobre o mesmo webhook; ponto de linearização `DISPATCHING`; teste concorrente e medição de lock. |
+| Secret comprometida | Falsificação de evento ao endpoint | A reunião não definiu revogação emergencial, grace period ou substituição. Se a operação for adotada, a proposta é restringi-la a `ADMIN` usando o precedente de `requireRole`; semântica da credencial e de requests em andamento continua pendente. |
+| Corrida soft delete/worker | Uma entrega reservada pode iniciar ou chegar ao cliente após o soft delete; um `DISPATCHING` abandonado pode gerar resultado externo desconhecido | Serializar claim e exclusão; cancelar somente PENDING/RETRY; assumir `DISPATCHING` como reserva não cancelável, não como prova de bytes enviados; definir recuperação por lease no FDD e deduplicar por `event_id`. |
 | Payload excessivo | Evento sem entrega ou DLQ sem registro | Contagem exata do JSON UTF-8 no produtor, worker e replay; persistir original e diagnóstico; não gerar retry. Falha de banco de persistência permanece falha transacional. |
 | Replay duplicado concorrente | Múltiplas chamadas/retries para mesma DLQ | Claim exclusivo/transação, `replay_started_at` ou estado equivalente e constraint/idempotência; preservar `event_id`, novo `attempt_id`. |
 | Endpoint lento/indisponível | Atraso e DLQ | Timeout 10 s, cinco retries adicionais nos intervalos confirmados e DLQ; replay não garante sucesso. |
 | SSRF por URL de destino | Acesso a rede interna/serviços não pretendidos | Validação de URL/IP, DNS, redirects e egress a definir com segurança; HTTPS sozinho não cobre esse risco. |
 | Entrega duplicada ou fora de ordem | Consumidor processa evento repetido ou estado antigo | `event_id` imutável e deduplicação no receptor; documentar ausência de garantia absoluta de ordenação. |
 | Worker único/backlog | Atraso > objetivo de 10 s | Métricas/alertas de backlog e idade; objetivo não é garantia. Escala multi-worker fica fora desta versão. |
-| DLQ/auditoria falha ao persistir | Perda de diagnóstico ou rollback do domínio | Outbox/DLQ na mesma transação quando viável; error path operacional. Validar o que fazer se banco indisponível, sem prometer persistência impossível. |
+| DLQ/auditoria falha ao persistir | A transação da mudança de pedido não pode ser commitada sem o registro durável correspondente | Persistir outbox/DLQ na mesma transação; propagar falha de banco e reverter a transação. Não usar promoção assíncrona como alternativa. |
 
 ## 14. Estratégia de validação e critérios de sucesso
 
@@ -274,16 +277,16 @@ A exclusão deve ocorrer em transação: marcar endpoint inativo/soft-deleted, c
 - **Integração transacional:** pedido, histórico, estoque e evento elegível commitam juntos; falha real de persistência de outbox reverte conforme a garantia; payload acima do limite é persistido como DLQ e não causa rollback por ser excessivo; nenhuma configuração elegível significa nenhum registro.
 - **Worker/HTTP:** HTTPS, headers, timeout, resposta, falha transitória, ausência de HTTP para payload grande, validação antes de retry, secret ativa após rotação e `X-Timestamp` atual com payload original.
 - **Autorização:** sem JWT, JWT inválido, vínculo ativo, vínculo ausente/revogado, tentativa com `customer_id` de terceiro e ADMIN/non-ADMIN no replay. Verificar que consulta a `CustomerMembership` ocorre por recurso e que a role não substitui o vínculo para operações de cliente.
-- **Exclusão concorrente:** worker e API disputam início de entrega; exclusão primeiro cancela e impede chamada; request já marcado como iniciado pode concluir; deliveries concluídas e DLQ permanecem; replay é recusado quando excluído.
+- **Exclusão concorrente:** worker e API disputam a reserva; exclusão confirmada primeiro cancela PENDING/RETRY e impede claim; claim confirmado primeiro mantém `DISPATCHING` e permite que a chamada inicie/conclua mesmo após o soft delete; o teste não deve interpretar `DISPATCHING` como prova de bytes enviados; deliveries concluídas e DLQ permanecem e replay é recusado quando excluído.
 - **Replay:** mesmo `event_id` e payload snapshot; novo `attempt_id`; nova assinatura e timestamp; verificação de tamanho/estado; excesso mantém DLQ e retorna `WEBHOOK_PAYLOAD_TOO_LARGE`; dois replays simultâneos produzem no máximo uma nova tentativa ativa.
-- **Segurança:** revisão de HMAC, geração/armazenamento de secrets, revogação imediata, logs e defesa contra SSRF.
+- **Segurança:** revisão de HMAC, geração/armazenamento de secrets, autorização `ADMIN` para eventual revogação emergencial, semântica de revogação a decidir, logs e defesa contra SSRF.
 
 ### Critérios de sucesso propostos
 
 - Zero mudança de status elegível commitada sem registro durável correspondente (outbox ou DLQ, conforme a validação de tamanho).
 - Payload acima de 65.536 bytes nunca resulta em chamada HTTP, truncamento ou retry; registro DLQ contém todos os dados de diagnóstico exigidos.
 - Replay não altera `event_id` nem payload; tentativa tem ID único, administrador identificado e resultado registrado.
-- Após soft delete commitado, nenhum evento ainda não despachado inicia chamada; preservam-se histórico entregue e DLQ.
+- Após soft delete commitado, nenhum evento ainda não reservado inicia chamada; uma entrega já em `DISPATCHING` pode iniciar ou chegar ao cliente depois do soft delete; preservam-se histórico entregue e DLQ.
 - Endpoints de gestão permitem acesso somente com vínculo ativo em `CustomerMembership` para o cliente do recurso; vínculo ausente ou revogado é negado, mesmo que o usuário conheça o `customer_id`.
 - Medir latência de confirmação até início da primeira tentativa; objetivo <10 s em operação normal sem convertê-lo em garantia/SLA.
 - A equipe define métricas/limites operacionais e ambiente de teste antes do rollout; volume, p95 e disponibilidade não estão especificados.
@@ -291,23 +294,24 @@ A exclusão deve ocorrer em transação: marcar endpoint inativo/soft-deleted, c
 ## 15. Perguntas abertas e decisões pendentes
 
 1. **Fechado como decisão de desenho deste RFC:** `CustomerMembership` persistida no MySQL é a fonte autoritativa proposta. Cada operação consulta o par usuário autenticado/cliente do recurso e exige vínculo ativo; concessões e revogações são administrativas, sem autoassociação. A relação ainda não existe no schema, então implementação, provisionamento e testes de autorização são dependências de entrega, não perguntas abertas de desenho.
-2. Qual formato de armazenamento em repouso e entrega única para secrets atende aos mecanismos já disponíveis? Existe chave de aplicação configurada ou proteção operacional equivalente? Não confirmado.
-3. Qual contrato/rota autoriza revogação emergencial, e o que fazer com tentativas HTTP já iniciadas sob a secret revogada?
-4. A persistência de payload grande diretamente na DLQ junto da transação de pedido é aceita mesmo que uma falha de banco na escrita da DLQ aborte a transação? Se não, deve-se optar por outbox intermediária e promoção assíncrona, aceitando consistência eventual.
-5. Como o sistema determina com precisão o ponto entre claim do worker e início efetivo do HTTP para conciliar exclusão e request iniciado? Validar a semântica operacional proposta (`DISPATCHING`) com Product/Security.
-6. Qual retenção se aplica ao histórico, DLQ, payload e auditoria, e a consulta de “últimas 100” limita só a resposta ou também armazenamento?
-7. Qual volume/throughput esperado, limiar de backlog e necessidade futura de múltiplos workers? Não informado.
-8. Quais controles contra SSRF, DNS rebinding e redirects são viáveis na rede de execução?
-9. Como registrar eventos de falha de assinatura do destinatário? A resposta HTTP pode não distinguir assinatura inválida de outro 4xx.
-10. Quem aprova formalmente o RFC e qual o prazo final? Autor/revisores e data de deploy não estão confirmados neste documento.
+2. Qual formato de armazenamento em repouso para secrets atende aos mecanismos disponíveis? Existe chave de aplicação configurada ou proteção operacional equivalente? Não confirmado.
+3. Qual contrato/rota, grace period, tratamento da secret substituta e política para requests já iniciados se aplicam à revogação emergencial? A autorização proposta é `ADMIN` com `requireRole`, por extensão do precedente de replay da DLQ registrado em [TRANSCRICAO.md](../TRANSCRICAO.md#L172-L214); a reunião não decidiu esses detalhes da revogação.
+4. A operação de rotação deve retornar a secret e consultas posteriores podem recuperá-la? A reunião confirma a devolução da secret na criação, mas não define esses comportamentos para rotação/consulta.
+5. **Fechado nesta proposta:** payload excedente é gravado diretamente na DLQ dentro da transação do pedido. Excesso de tamanho, por si só, não reverte o pedido; falha real de persistência da DLQ aborta a transação. Outbox intermediária com promoção assíncrona não será adotada.
+6. **Fechado como semântica de desenho desta proposta:** `DISPATCHING` é a reserva irrevogável do despacho, não o instante literal de abertura da conexão ou envio do primeiro byte. Se o claim confirmar antes do soft delete, essa entrega não é cancelada e ainda pode chegar ao cliente depois da exclusão; se a exclusão confirmar primeiro, o claim falha e PENDING/RETRY são cancelados. A aceitação formal dessa janela por Product/Security continua necessária antes do deploy. A recuperação de `DISPATCHING` abandonado e seu lease devem ser detalhados no FDD, considerando possível duplicata e deduplicação por `event_id`.
+7. Qual retenção se aplica ao histórico, DLQ, payload e auditoria, e a consulta de “últimas 100” limita só a resposta ou também armazenamento?
+8. Qual volume/throughput esperado, limiar de backlog e necessidade futura de múltiplos workers? Não informado.
+9. Quais controles contra SSRF, DNS rebinding e redirects são viáveis na rede de execução?
+10. Como registrar eventos de falha de assinatura do destinatário? A resposta HTTP pode não distinguir assinatura inválida de outro 4xx.
+11. Quem aprova formalmente o RFC e qual o prazo final? Autor/revisores e data de deploy não estão confirmados neste documento.
 
 ## 16. Recomendação provisória e justificativa
 
-Recomenda-se provisoriamente seguir com Transactional Outbox no MySQL e worker isolado, autorização de gestão pelo vínculo explícito usuário-cliente, soft delete com cancelamento e preservação de histórico, HMAC com rotação imediata e revogação emergencial, e preservação de `event_id` através de retries/replay.
+Recomenda-se provisoriamente seguir com Transactional Outbox no MySQL e worker isolado, autorização de gestão pelo vínculo explícito usuário-cliente, soft delete com cancelamento e preservação de histórico, HMAC e preservação de `event_id` através de retries/replay. A ativação imediata permanece proposta sem confirmação na transcrição. Se houver revogação emergencial, restringi-la a `ADMIN` por extensão do precedente de autorização do replay, deixando grace period e requests em voo em aberto até decisão explícita.
 
-Para payload excessivo, recomenda-se calcular o tamanho UTF-8 no ponto de construção do snapshot e registrar diretamente na DLQ na mesma transação do pedido, como classificação terminal e sem lançar exceção de tamanho. Revalidar no worker e replay para defesa em profundidade. Para corrida de exclusão, usar claim/atualização condicional serializada e estado de despacho como ponto de não cancelamento, com validação concorrente antes de implementação.
+Para payload excessivo, recomenda-se calcular o tamanho UTF-8 no ponto de construção do snapshot e registrar diretamente na DLQ na mesma transação do pedido, como classificação terminal e sem lançar exceção de tamanho. Revalidar no worker e replay para defesa em profundidade. Para corrida de exclusão, usar claim/atualização condicional serializada; `DISPATCHING` é a reserva não cancelável, mesmo se a conexão ainda não tiver sido aberta. Testes devem validar os dois ordenamentos concorrentes, e Product/Security ainda precisam aprovar formalmente a possibilidade de envio após o soft delete quando o claim venceu primeiro.
 
-A justificativa é reduzir risco de bloqueio do OMS, reutilizar MySQL/Prisma e mecanismos já presentes e explicitar a identidade do evento, auditoria e limites de autorização. A fonte e a regra de autorização usuário-cliente estão definidas como proposta neste RFC; a recomendação geral permanece **provisória** por depender da implementação/provisionamento do vínculo, da revisão de segurança, do tratamento de falha de persistência DLQ e da validação da sincronização de exclusão/despacho. A decisão de desenho sobre o vínculo pode ser formalizada no ADR-021 após revisão e aceitação.
+A justificativa é reduzir risco de bloqueio do OMS, reutilizar MySQL/Prisma e mecanismos já presentes e explicitar a identidade do evento, auditoria e limites de autorização. A fonte e a regra de autorização usuário-cliente estão definidas como proposta neste RFC. Para exclusão/despacho, a semântica proposta é explícita: `DISPATCHING` reserva uma entrega de forma não cancelável, mesmo que a conexão ainda não tenha sido aberta; a aceitação formal dessa janela por Product/Security continua pendente. A recomendação geral permanece **provisória** por depender da implementação/provisionamento do vínculo, da revisão de segurança e da aprovação das políticas de segurança e operação. A falha de persistência da DLQ é definida como rollback transacional e não depende de decisão adicional nesta proposta.
 
 ## 17. Referências e evidências
 
@@ -330,11 +334,63 @@ A justificativa é reduzir risco de bloqueio do OMS, reutilizar MySQL/Prisma e m
 - [docs/PRD.md](../PRD.md) — requisitos, escopo, riscos, métricas e critérios de aceitação consolidados.
 - [docs/TRACKER.md](../TRACKER.md) — rastreabilidade existente do PRD; esta atualização não pode comprovar decisões fornecidas apenas durante a entrevista atual por falta de fonte persistida permitida no tracker.
 
+### Rastreabilidade temporal da transcrição
+
+Os momentos abaixo registram exatamente onde os principais pontos presentes neste RFC foram abordados na transcrição.
+
+#### Contexto e arquitetura
+- **Necessidade dos clientes B2B e consulta repetitiva:** Atlas Comercial, MaxDistribuição e Nova Cargo pediram notificações e hoje usam `GET /orders` repetidamente (`[09:00] Marcos`).
+- **Prazo comercial da Atlas:** possível migração para concorrente se a entrega não ocorrer até o fim do trimestre (`[09:00] Marcos`).
+- **Critério de tempo real:** menos de 10 segundos é considerado tempo real pelos clientes (`[09:02] Marcos`).
+- **Escopo somente outbound:** o OMS envia aos clientes; eles não enviam webhooks inbound para a plataforma (`[09:02] Sofia`, `[09:02] Marcos`, `[09:03] Sofia`).
+- **Rejeição do envio síncrono:** um endpoint lento ou indisponível não pode bloquear ou fazer rollback da mudança de status (`[09:04] Bruno`, `[09:05] Larissa`).
+- **Transactional Outbox:** evento inserido na tabela de outbox na mesma transação SQL que atualiza o pedido e o histórico (`[09:06] Diego`).
+- **Redis/broker dedicado descartado:** Redis Streams não foi escolhido para evitar infraestrutura adicional no MySQL existente (`[09:07] Larissa`, `[09:07] Diego`).
+- **Polling a cada 2 segundos:** o worker busca pendentes mais antigos em batch pequeno; triggers não notificam processos externos (`[09:09] Diego`, `[09:09] Bruno`, `[09:09] Diego`, `[09:10] Larissa`).
+- **Worker separado:** o processo não pode compartilhar o ciclo de vida da API; entry point proposta `src/worker.ts` e script `npm run worker` (`[09:11] Diego`, `[09:11] Larissa`, `[09:11] Bruno`, `[09:28] Bruno`, `[09:28] Diego`).
+- **Ordenação inicial:** único worker processa por `created_at`; múltiplos workers e ordenação global ficam fora da primeira versão (`[09:12] Diego`, `[09:13] Diego`, `[09:13] Larissa`, `[09:14] Marcos`).
+- **Prisma por processo:** worker conecta ao mesmo banco com instância Prisma própria, pois é outro processo Node.js (`[09:29] Diego`, `[09:30] Bruno`, `[09:30] Larissa`).
+
+#### Contratos e entrega
+- **Snapshot na outbox:** o payload é renderizado na inserção para refletir o estado da mudança, não o estado posterior do pedido (`[09:51] Diego`, `[09:51] Larissa`, `[09:51] Bruno`, `[09:52] Larissa`, `[09:52] Diego`, `[09:52] Bruno`).
+- **UUID da outbox:** decisão de usar UUID, no padrão do restante do projeto (`[09:51] Diego`, `[09:51] Larissa`).
+- **Integração transacional com pedidos:** `changeStatus` deve publicar o evento elegível usando o cliente transacional atual e falha de outbox deve reverter todo o fluxo (`[09:40] Bruno`, `[09:41] Diego`, `[09:41] Bruno`, `[09:41] Diego`).
+- **Filtragem na outbox:** configurações inativas ou não inscritas no status não produzem evento; a filtragem ocorre na inserção, não no envio (`[09:33] Marcos`, `[09:34] Diego`, `[09:34] Bruno`, `[09:34] Diego`).
+- **Payload do evento:** JSON com `event_id`, `event_type`, timestamp ISO 8601, dados do pedido, `customer_id` e campos básicos como `total_cents`, sem `items` (`[09:43] Marcos`, `[09:43] Diego`, `[09:44] Bruno`).
+- **Headers de entrega:** `X-Event-Id`, `X-Webhook-Id`, `X-Signature`, `X-Timestamp` e `Content-Type: application/json` (`[09:44] Diego`, `[09:44] Sofia`, `[09:45] Diego`).
+- **At-least-once:** duplicatas são possíveis e exactly-once foi descartado pela coordenação necessária entre plataforma e consumidor (`[09:24] Diego`, `[09:25] Bruno`, `[09:25] Diego`, `[09:25] Sofia`, `[09:26] Larissa`).
+- **Deduplicação pelo consumidor:** o cliente usa o UUID de `X-Event-Id` para reconhecer repetições (`[09:25] Bruno`, `[09:25] Diego`, `[09:25] Sofia`, `[09:26] Larissa`).
+- **Timeout HTTP:** 10 segundos; uma chamada não concluída nesse prazo é falha e entra na política de retry (`[09:42] Sofia`, `[09:42] Diego`).
+- **Limite de payload informado na reunião:** rejeitar payload acima de 64 KB sem enviar ou truncar (`[09:23] Sofia`, `[09:24] Larissa`, `[09:24] Diego`). O limite físico adotado na proposta é 65.536 bytes/64 KiB.
+
+#### Retentativas, DLQ e replay
+- **Cinco tentativas adicionais:** os intervalos acordados são 1 minuto, 5 minutos, 30 minutos, 2 horas e 12 horas (`[09:15] Diego`, `[09:16] Larissa`, `[09:17] Diego`, `[09:17] Marcos`, `[09:17] Larissa`). A contagem como adicional à tentativa inicial foi esclarecida durante a elaboração posterior do PRD, não explicitamente definida na transcrição.
+- **DLQ separada:** tabela `webhook_dead_letter` com payload, motivo da falha e timestamp, separada da outbox principal (`[09:17] Larissa`, `[09:18] Diego`, `[09:18] Bruno`, `[09:18] Diego`).
+- **Replay administrativo:** `POST /admin/webhooks/dead-letter/:id/replay` recoloca o evento na outbox como pendente (`[09:18] Diego`, `[09:18] Bruno`, `[09:19] Larissa`, `[09:35] Diego`, `[09:35] Larissa`).
+- **Replay somente para ADMIN:** o replay exige role `ADMIN` e deve registrar o administrador solicitante (`[09:35] Larissa`, `[09:36] Sofia`, `[09:36] Larissa`, `[09:49] Sofia`).
+
+#### Segurança e autorização
+- **HMAC-SHA256:** assinar o corpo do request com algoritmo padrão de mercado e enviar a assinatura em `X-Signature` (`[09:19] Sofia`, `[09:20] Sofia`, `[09:20] Bruno`, `[09:20] Sofia`).
+- **Secret por endpoint:** cada webhook possui secret exclusiva, não uma secret global (`[09:21] Sofia`, `[09:21] Bruno`, `[09:21] Sofia`).
+- **Rotação:** secret anterior permanece válida em paralelo por 24 horas após a rotação (`[09:21] Sofia`, `[09:22] Diego`, `[09:22] Sofia`, `[09:22] Larissa`).
+- **HTTPS obrigatório:** URL HTTP é recusada por validação Zod (`[09:23] Sofia`).
+- **Customer_id no recurso:** não vem do JWT; o body ou path informa o cliente do recurso (`[09:31] Marcos`, `[09:32] Bruno`, `[09:32] Marcos`, `[09:32] Larissa`).
+- **Lacuna de autorização por cliente:** a reunião não define a associação usuário-cliente nem o vínculo efetivo para impedir acesso cruzado (`[09:32] Larissa`, `[09:36] Marcos`, `[09:37] Sofia`).
+- **Revisão de segurança:** reservar pelo menos dois dias úteis para HMAC e geração/armazenamento de secrets antes do deploy (`[09:46] Sofia`, `[09:47] Larissa`, `[09:49] Sofia`).
+
+#### Fora de escopo e riscos
+- **E-mail de falha:** fora desta fase; possível avaliação futura após medir impacto (`[09:37] Larissa`, `[09:37] Marcos`, `[09:38] Marcos`).
+- **Rate limiting de saída:** fora desta fase; observar volume e decidir posteriormente (`[09:38] Diego`, `[09:39] Larissa`, `[09:39] Diego`).
+- **Dashboard/painel visual:** fora desta fase; o frontend atende via endpoints da API (`[09:39] Marcos`, `[09:40] Larissa`, `[09:40] Marcos`).
+- **Arquivamento após 30 dias:** citado como fora do escopo da feature (`[09:08] Diego`).
+- **Ordens futuras e múltiplos workers:** escalabilidade paralela fica para o futuro; não há garantia de ordenação global (`[09:12] Diego`, `[09:13] Bruno`, `[09:13] Diego`, `[09:13] Larissa`).
+- **Prazo estimado:** três sprints, incluindo a revisão de segurança, com prazo ainda sujeito à confirmação dos responsáveis (`[09:45] Marcos`, `[09:46] Larissa`, `[09:46] Sofia`, `[09:47] Larissa`).
+
 **Divergência de prazo a confirmar:** a transcrição registra que Atlas queria entrega até o fim de novembro e a estimativa discutida foi de três sprints ([TRANSCRICAO.md](../../TRANSCRICAO.md#L270-L277)); o PRD resume o risco como “até o fim do trimestre”. Este RFC não escolhe um prazo como compromisso aprovado.
 
 ### Fonte das decisões desta elaboração e lacunas de evidência
 
-As decisões de usar `CustomerMembership` persistida no MySQL, validar o vínculo ativo em cada operação e restringir concessão/revogação a provisionamento administrativo, além da ativação imediata de secret, revogação emergencial, soft delete, cancelamento e preservação de registros, encaminhamento de payload excessivo diretamente à DLQ, resposta de replay por excesso e preservação de `event_id`, foram **adotadas para esta proposta durante a conversa de elaboração**. A conversa não está registrada em `TRANSCRICAO.md`, e essas regras não estão implementadas no código consultado. Logo, são diretrizes de desenho, não fatos do sistema nem decisões presentes na reunião original. O item de desenho está fechado neste RFC, mas rastreabilidade documental válida e aprovação formal ainda dependem de incorporar a decisão a uma fonte aprovada; o tracker não deve atribuir evidência de código a uma implementação inexistente.
+As regras de `CustomerMembership`, soft delete, `DISPATCHING` e classificação de payload excessivo são propostas deste RFC e não implementação existente. A ativação imediata é uma proposta registrada na seção de rotação da ADR-019, não uma decisão da transcrição. A reunião estabeleceu `ADMIN`/`requireRole` para replay sensível; restringir revogação emergencial a `ADMIN` é uma extensão proposta desse precedente, não uma deliberação explícita sobre revogação. A reunião não definiu divulgação única, período de graça para revogação ou tratamento de requests já iniciados; esses pontos permanecem em aberto e não devem ser apresentados como requisitos acordados. O tracker deve citar somente o que a transcrição ou o código demonstram e deixar explícita a lacuna da extensão.
 
 ## 18. Histórico de revisões
 
@@ -342,3 +398,5 @@ As decisões de usar `CustomerMembership` persistida no MySQL, validar o víncul
 | --- | --- | --- |
 | 2026-11-02 | Criação do RFC em estado Draft a partir do PRD, transcrição, código consultado e diretrizes informadas durante a entrevista. | Não confirmado |
 | 2026-11-14 | Definição proposta de `CustomerMembership` como fonte de autorização por cliente; sincronização do ADR-021 e registro de que a pendência de concorrência do ADR-022 permanece aberta. | Não confirmado |
+| 2026-11-14 | Precisada a semântica de `DISPATCHING`: reserva não cancelável, que pode anteceder o início efetivo do HTTP; exclusão posterior não cancela a entrega reservada. Aprovação formal Product/Security permanece pendente. | Não confirmado |
+| 2026-11-14 | Revisada a rastreabilidade de secrets: ativação imediata permanece proposta, revogação ADMIN-only é extensão do precedente de replay e divulgação única/grace period/requests em voo não são atribuídos à reunião. | Não confirmado |

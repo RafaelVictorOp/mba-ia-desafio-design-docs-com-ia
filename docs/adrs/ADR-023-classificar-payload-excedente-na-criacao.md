@@ -2,14 +2,13 @@
 status: proposed
 date: 2026-11-08
 ---
-
 # ADR-023: Classificar payload excedente na criação do evento
 
 ## Contexto e problema
 
 O RFC define um limite de 65.536 bytes para a serialização JSON em UTF-8 e propõe que eventos excedentes sejam classificados como falha permanente na criação do snapshot. O comportamento proposto é persistir o payload original e o diagnóstico diretamente na DLQ, sem HTTP, truncamento, fragmentação ou retry, e sem reverter pedido apenas por causa do tamanho. Não há outbox ou DLQ de webhook no schema atual (`prisma/schema.prisma:1-53`).
 
-O RFC reconhece que uma falha real de banco ao persistir a DLQ pode abortar a transação do pedido; não propõe ignorar falhas de persistência.
+Uma falha real de banco ao persistir a DLQ aborta a transação do pedido, preservando a atomicidade entre a mudança de status e o registro durável do evento. Não será usada outbox intermediária com promoção assíncrona para contornar essa falha.
 
 ## Fatores de decisão
 
@@ -26,18 +25,18 @@ O RFC reconhece que uma falha real de banco ao persistir a DLQ pode abortar a tr
 
 ## Resultado da decisão
 
-**Opção proposta:** medir o tamanho do snapshot serializado na criação e persistir diretamente na DLQ quando ultrapassar 65.536 bytes, porque isso permite classificação terminal imediata e evita envio ou retry de um evento conhecido como excedente. A alteração de tamanho não deve, por si só, reverter pedido, histórico ou estoque.
+**Opção proposta:** medir o tamanho do snapshot serializado na criação e persistir diretamente na DLQ quando ultrapassar 65.536 bytes, porque isso permite classificação terminal imediata e evita envio ou retry de um evento conhecido como excedente. A alteração de tamanho não deve, por si só, reverter pedido, histórico ou estoque; uma falha real ao persistir a DLQ é falha transacional e deve reverter a transação. Outbox intermediária com promoção assíncrona está fora das opções desta proposta.
 
 ### Consequências
 
 - **Positiva:** eventos excedentes são identificados antes do worker e ficam disponíveis para diagnóstico sem serem enviados.
 - **Positiva:** o caminho de sucesso não depende de retries para detectar um tamanho já conhecido na criação.
-- **Negativa:** serialização e cálculo de bytes passam a integrar o fluxo transacional; falha ao persistir a DLQ permanece uma falha de persistência e pode abortar a transação.
+- **Negativa:** serialização e cálculo de bytes passam a integrar o fluxo transacional; falha ao persistir a DLQ aborta a transação.
 - **Negativa:** API, worker e replay precisam aplicar a mesma regra de medição.
 
 ### Confirmação
 
-Verificar casos de 65.535, 65.536 e 65.537 bytes em UTF-8. Confirmar que o caso acima do limite produz DLQ com payload original e diagnóstico, não gera request HTTP nem retry, e não causa rollback apenas por exceder o tamanho. Também verificar que falha de persistência é propagada conforme a garantia transacional aprovada.
+Verificar casos de 65.535, 65.536 e 65.537 bytes em UTF-8. Confirmar que o caso acima do limite produz DLQ com payload original e diagnóstico, não gera request HTTP nem retry, e não causa rollback apenas por exceder o tamanho. Confirmar também que falha de persistência da DLQ aborta a transação do pedido.
 
 ## Prós e contras das opções
 
@@ -45,6 +44,7 @@ Verificar casos de 65.535, 65.536 e 65.537 bytes em UTF-8. Confirmar que o caso 
 
 - **Pró:** classifica o evento excedente imediatamente e impede que percorra a fila de entregas ou retries.
 - **Contra:** exige serialização e cálculo consistentes na API e mantém a escrita da DLQ dentro da transação do pedido.
+- **Contra:** indisponibilidade/falha do banco ao persistir a DLQ também impede o commit da mudança de status, conforme a garantia de atomicidade.
 
 ### Validar somente no worker
 
@@ -61,4 +61,4 @@ Verificar casos de 65.535, 65.536 e 65.537 bytes em UTF-8. Confirmar que o caso 
 - RFC: [`docs/RFC.md`](../../../RFC.md), seções “Requisitos e restrições”, “Recomendação provisória para payload excedente”, “Alternativas consideradas” e “Perguntas abertas e decisões pendentes”.
 - Mapeamento de escopo: [`mapping.md`](../../../adrs/adrs_sistema/mapping.md), módulos ORDERS e DATA.
 - Evidência do estado atual: [`schema.prisma`](../../../../prisma/schema.prisma#L1-L53) não define outbox nem DLQ de webhooks.
-- **PENDENTE DE VALIDAÇÃO:** confirmar se uma falha de banco ao gravar o payload excedente na DLQ deve continuar abortando a transação do pedido. O RFC registra essa consequência e aponta outbox intermediária com promoção assíncrona como alternativa ainda não escolhida.
+- **Decisão desta proposta:** falha de banco ao gravar o payload excedente na DLQ aborta a transação do pedido. Não usar outbox intermediária nem promoção assíncrona; validar esse comportamento nos testes de integração transacional.
