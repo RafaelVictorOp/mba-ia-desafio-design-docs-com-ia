@@ -334,6 +334,13 @@ A justificativa é reduzir risco de bloqueio do OMS, reutilizar MySQL/Prisma e m
 - [docs/PRD.md](../PRD.md) — requisitos, escopo, riscos, métricas e critérios de aceitação consolidados.
 - [docs/TRACKER.md](../TRACKER.md) — rastreabilidade existente do PRD; esta atualização não pode comprovar decisões fornecidas apenas durante a entrevista atual por falta de fonte persistida permitida no tracker.
 
+### ADRs relacionadas
+
+- [ADR-018: Registrar eventos em outbox MySQL e entregá-los por worker separado](adrs/ADR-018-outbox-mysql-worker-polling.md)
+- [ADR-019: Assinatura HMAC e ciclo de vida de secrets por endpoint](adrs/ADR-019-assinatura-hmac-por-endpoint.md)
+- [ADR-020: Usar entrega at-least-once com identidade estável do evento](adrs/ADR-020-entrega-at-least-once-com-event-id.md)
+- [ADR-021: Autorizar a gestão de webhooks pelo vínculo usuário-cliente](adrs/ADR-021-autorizacao-por-vinculo-usuario-cliente.md)
+
 ### Rastreabilidade temporal da transcrição
 
 Os momentos abaixo registram exatamente onde os principais pontos presentes neste RFC foram abordados na transcrição.

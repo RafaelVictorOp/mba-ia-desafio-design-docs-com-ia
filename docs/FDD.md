@@ -130,13 +130,126 @@ O critério HTTP de sucesso e o tratamento final de payload excedente ainda prec
 
 ### 5. Contratos públicos (assinaturas, endpoints, headers, exemplos)
 
+Os contratos abaixo são normativos para a implementação. Todas as rotas exigem `Authorization: Bearer <JWT>` e retornam `Content-Type: application/json`, exceto respostas `204`. Erros seguem o envelope existente `{ "error": { "code": "WEBHOOK_*", "message": "...", "details": {} } }`.
+
+#### Criar configuração
+
+- **Rota:** `POST /api/v1/webhooks`
+- **Request:**
+
+```json
+{
+  "customer_id": "7d353290-cf4d-4cc7-85f7-e6297c9f80c5",
+  "url": "https://cliente.example.com/webhooks/orders",
+  "statuses": ["SHIPPED", "DELIVERED"]
+}
+```
+
+- **Response `201 Created`:**
+
+```json
+{
+  "id": "ab3a0496-98ea-42f0-88d9-f93f06d17df2",
+  "customer_id": "7d353290-cf4d-4cc7-85f7-e6297c9f80c5",
+  "url": "https://cliente.example.com/webhooks/orders",
+  "statuses": ["SHIPPED", "DELIVERED"],
+  "active": true,
+  "secret": "whsec_gerada_pela_plataforma"
+}
+```
+
+- **Status codes:** `201`; `400 WEBHOOK_INVALID_REQUEST`; `401 WEBHOOK_UNAUTHENTICATED`; `403 WEBHOOK_CUSTOMER_ACCESS_DENIED`; `409 WEBHOOK_ENDPOINT_ALREADY_EXISTS`; `500 WEBHOOK_INTERNAL_ERROR`. A secret é exibida somente na criação.
+
+#### Atualizar configuração
+
+- **Rota:** `PATCH /api/v1/webhooks/:id`
+- **Request:**
+
+```json
+{
+  "url": "https://cliente.example.com/webhooks/orders-v2",
+  "statuses": ["PROCESSING", "SHIPPED", "DELIVERED"],
+  "active": true
+}
+```
+
+- **Response `200 OK`:**
+
+```json
+{
+  "id": "ab3a0496-98ea-42f0-88d9-f93f06d17df2",
+  "customer_id": "7d353290-cf4d-4cc7-85f7-e6297c9f80c5",
+  "url": "https://cliente.example.com/webhooks/orders-v2",
+  "statuses": ["PROCESSING", "SHIPPED", "DELIVERED"],
+  "active": true
+}
+```
+
+- **Status codes:** `200`; `400 WEBHOOK_INVALID_REQUEST`; `401 WEBHOOK_UNAUTHENTICATED`; `403 WEBHOOK_CUSTOMER_ACCESS_DENIED`; `404 WEBHOOK_ENDPOINT_NOT_FOUND`; `409 WEBHOOK_ENDPOINT_ALREADY_EXISTS`; `500 WEBHOOK_INTERNAL_ERROR`.
+
+#### Remover configuração
+
+- **Rota:** `DELETE /api/v1/webhooks/:id`
+- **Request:** sem body.
+- **Response `204 No Content`:** sem body. A remoção é lógica (`active=false` e `deleted_at` preenchido) e impede a criação de novos eventos.
+- **Status codes:** `204`; `401 WEBHOOK_UNAUTHENTICATED`; `403 WEBHOOK_CUSTOMER_ACCESS_DENIED`; `404 WEBHOOK_ENDPOINT_NOT_FOUND`; `409 WEBHOOK_ENDPOINT_DISPATCHING`; `500 WEBHOOK_INTERNAL_ERROR`.
+
+#### Listar configurações de um cliente
+
+- **Rota:** `GET /api/v1/webhooks?customer_id=<uuid>&limit=20&cursor=<uuid>`
+- **Request:** sem body; `customer_id` é obrigatório, `limit` varia de 1 a 100 e `cursor` é opcional.
+- **Response `200 OK`:**
+
+```json
+{
+  "data": [
+    {
+      "id": "ab3a0496-98ea-42f0-88d9-f93f06d17df2",
+      "customer_id": "7d353290-cf4d-4cc7-85f7-e6297c9f80c5",
+      "url": "https://cliente.example.com/webhooks/orders",
+      "statuses": ["SHIPPED", "DELIVERED"],
+      "active": true
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+- **Status codes:** `200`; `400 WEBHOOK_INVALID_REQUEST`; `401 WEBHOOK_UNAUTHENTICATED`; `403 WEBHOOK_CUSTOMER_ACCESS_DENIED`; `500 WEBHOOK_INTERNAL_ERROR`.
+
+#### Consultar histórico de entregas
+
+- **Rota:** `GET /api/v1/webhooks/:id/deliveries?limit=100`
+- **Request:** sem body; `limit` é opcional, entre 1 e 100.
+- **Response `200 OK`:**
+
+```json
+{
+  "data": [
+    {
+      "id": "d01907c0-8dbc-43f8-8809-a05b159787df",
+      "event_id": "78253ee2-baa9-48e4-a61d-65f22b2967a4",
+      "attempt": 1,
+      "status": "SUCCEEDED",
+      "http_status": 204,
+      "response_time_ms": 183,
+      "attempted_at": "2026-11-22T12:11:00.000Z"
+    }
+  ]
+}
+```
+
+- **Status codes:** `200`; `400 WEBHOOK_INVALID_REQUEST`; `401 WEBHOOK_UNAUTHENTICATED`; `403 WEBHOOK_CUSTOMER_ACCESS_DENIED`; `404 WEBHOOK_ENDPOINT_NOT_FOUND`; `500 WEBHOOK_INTERNAL_ERROR`.
+
+Esses cinco contratos definem rota, request, response e status HTTP. O replay administrativo permanece em `POST /api/v1/admin/webhooks/dead-letter/:id/replay`, com `202` em caso de aceite, e a entrega outbound considera qualquer `2xx` sucesso; `408`, `425`, `429`, `5xx`, falha de conexão e timeout são retentáveis.
+
 **Gerenciamento de configurações de webhook**
 
 - Tipo: endpoint
-- Assinatura/Rota: `POST`, `PATCH`, `DELETE` e `GET` para configurações; rotas exatas de criação, alteração, remoção e listagem precisam ser confirmadas. A API existente é versionada sob `/api/v1`.
+- Assinatura/Rota: `POST /api/v1/webhooks`, `PATCH /api/v1/webhooks/:id`, `DELETE /api/v1/webhooks/:id` e `GET /api/v1/webhooks`, conforme os contratos normativos acima.
 - Método: `POST`, `PATCH`, `DELETE` ou `GET`, conforme operação.
 - Autenticação: JWT. `customer_id` é informado no body ou path; não é inferido diretamente do JWT. Para CRUD e consulta, também é obrigatório vínculo persistido entre o usuário autenticado e o cliente do recurso.
-- Semântica de status/headers: status HTTP, formato de erros e resposta completa ainda não foram especificados.
+- Semântica de status/headers: status HTTP, formato de erros e respostas estão definidos nos contratos normativos acima.
 
 **Exemplo de requisição**
 
@@ -160,7 +273,7 @@ O critério HTTP de sucesso e o tratamento final de payload excedente ainda prec
 }
 ```
 
-Os campos e formatos acima são ilustrativos; schema definitivo, resposta e divulgação da secret em operações posteriores não estão definidos.
+Os schemas normativos são os definidos no início desta seção; a secret não é devolvida em operações posteriores.
 
 **Gestão de vínculos usuário-cliente**
 
@@ -179,7 +292,7 @@ Payloads, códigos HTTP e formatos de resposta ainda não definidos; não assumi
 - Tipo: endpoint
 - Assinatura/Rota: `GET /api/v1/webhooks/:id/deliveries` (o recurso foi registrado como `GET /webhooks/:id/deliveries`; o prefixo versionado vem do HLD).
 - Método: `GET`
-- Semântica de status/headers: até 100 entregas recentes com status, payload, resposta e tempo de resposta; paginação, códigos HTTP e filtragem ainda não definidos.
+- Semântica de status/headers: até 100 entregas recentes, conforme o contrato normativo de histórico acima.
 
 **Exemplo de requisição**
 
@@ -269,6 +382,28 @@ A resposta do destinatário é ilustrativa; códigos de sucesso aceitos e semân
 
 ### 6. Erros, exceções e fallback
 
+**Matriz de erros do módulo**
+
+| Código | HTTP | Quando ocorre | Tratamento/fallback |
+| --- | ---: | --- | --- |
+| `WEBHOOK_INVALID_REQUEST` | 400 | UUID, URL HTTPS, statuses, paginação ou body inválido | Rejeitar antes de persistir e devolver detalhes de validação. |
+| `WEBHOOK_UNAUTHENTICATED` | 401 | JWT ausente, inválido ou expirado | Negar a operação. |
+| `WEBHOOK_CUSTOMER_ACCESS_DENIED` | 403 | Usuário sem vínculo ativo com o cliente do recurso | Negar por padrão sem revelar dados do recurso. |
+| `WEBHOOK_ADMIN_REQUIRED` | 403 | Operação administrativa feita sem role `ADMIN` | Negar e registrar a tentativa de auditoria. |
+| `WEBHOOK_ENDPOINT_NOT_FOUND` | 404 | Configuração inexistente, removida ou invisível ao usuário | Não revelar se o recurso pertence a outro cliente. |
+| `WEBHOOK_DLQ_ITEM_NOT_FOUND` | 404 | Item da DLQ inexistente | Não agendar replay. |
+| `WEBHOOK_ENDPOINT_ALREADY_EXISTS` | 409 | Cliente já possui a mesma URL ativa | Preservar o cadastro existente. |
+| `WEBHOOK_ENDPOINT_DISPATCHING` | 409 | Exclusão conflita com entrega já reservada | Concluir a tentativa reservada e bloquear a exclusão concorrente. |
+| `WEBHOOK_REPLAY_ALREADY_PENDING` | 409 | Evento já está pendente ou em processamento | Não criar replay concorrente. |
+| `WEBHOOK_PAYLOAD_TOO_LARGE` | 422 | Payload serializado excede 64 KB UTF-8 | Não truncar nem enviar; mover diretamente para a DLQ. |
+| `WEBHOOK_DELIVERY_REJECTED` | 422 | Destino responde `4xx` não retentável | Registrar falha permanente e mover para a DLQ. |
+| `WEBHOOK_DELIVERY_RETRYABLE` | 502 | Falha de conexão ou resposta `408`, `425`, `429` ou `5xx` | Registrar tentativa e reagendar conforme o backoff. |
+| `WEBHOOK_DELIVERY_TIMEOUT` | 504 | Destino não responde em 10 segundos | Registrar tentativa e reagendar conforme o backoff. |
+| `WEBHOOK_OUTBOX_WRITE_FAILED` | 500 | Falha ao gravar o evento na transação do pedido | Fazer rollback integral e propagar erro. |
+| `WEBHOOK_INTERNAL_ERROR` | 500 | Falha inesperada da API ou do worker | Registrar `request_id`/`attempt_id` sem expor detalhes internos. |
+
+Os códigos são usados em `AppError.errorCode`, nos logs e, quando houver resposta da API, no envelope do middleware central de erros. Secrets, assinaturas, tokens e payloads completos nunca são incluídos no erro.
+
 - Matriz de erros previstos e tratamentos:
   - Transição de status inválida: rejeitar conforme as regras existentes de pedidos; não criar evento.
   - Falha de banco/outbox dentro da transação: propagar erro e reverter pedido, histórico e estoque.
@@ -312,6 +447,23 @@ A resposta do destinatário é ilustrativa; códigos de sucesso aceitos e semân
 
 ### 8. Dependências e compatibilidade
 
+**Integração com o sistema existente**
+
+| Caminho real do código-base | Integração necessária |
+| --- | --- |
+| `src/modules/orders/order.service.ts` | Estender `changeStatus()` para selecionar endpoints elegíveis e gravar snapshots na outbox dentro da transação Prisma existente. |
+| `src/modules/orders/order.repository.ts` | Reutilizar as operações de pedido/histórico e compartilhar o transaction client com a gravação da outbox. |
+| `src/routes/index.ts` | Registrar os novos routers `/webhooks` e `/admin/webhooks` sob o prefixo da aplicação. |
+| `src/app.ts` | Construir repositories, services e controllers do módulo e manter a montagem global em `/api/v1`. |
+| `src/middlewares/auth.middleware.ts` | Reutilizar `authenticate` e `requireRole('ADMIN')` e aplicar autorização por vínculo cliente-recurso. |
+| `src/middlewares/validate.middleware.ts` | Validar params, query e bodies dos contratos com schemas Zod. |
+| `src/middlewares/error.middleware.ts` | Preservar o envelope de `AppError` e os status/códigos `WEBHOOK_*` da matriz. |
+| `src/shared/errors/app-error.ts` | Representar falhas do domínio com `statusCode`, `errorCode` e `details`. |
+| `src/shared/logger/index.ts` | Reutilizar Pino e ampliar a redação de secrets, assinaturas e tokens. |
+| `prisma/schema.prisma` | Adicionar configurações, memberships, eventos/outbox, tentativas, DLQ e auditoria relacionados a `Customer`, `User` e `Order`. |
+
+Arquivos novos devem seguir a estrutura atual em `src/modules`: `src/modules/webhooks/webhook.routes.ts`, `webhook.controller.ts`, `webhook.service.ts`, `webhook.repository.ts` e `webhook.schemas.ts`. O worker terá entrypoint próprio em `src/workers/webhook-delivery.worker.ts` e um `PrismaClient` independente do processo HTTP.
+
 | Componente       | Versão mínima | Observações                                                                                      |
 | ---------------- | --------------- | -------------------------------------------------------------------------------------------------- |
 | Node.js          | 20              | `package.json` declara `>=20`; worker será novo processo.                                     |
@@ -323,7 +475,7 @@ A resposta do destinatário é ilustrativa; códigos de sucesso aceitos e semân
 
 **Garantias de compatibilidade**
 
-- A API segue o prefixo versionado `/api/v1`; rotas finais da feature devem ser aprovadas.
+- A API segue o prefixo versionado `/api/v1`; as rotas finais da feature estão definidas na seção 5.
 - Reutilizar MySQL e Prisma existentes, sem introduzir broker nesta versão.
 - O worker deve ter `PrismaClient` próprio por processo.
 - Não há requisito confirmado de portabilidade para outro banco nem política completa de compatibilidade/versionamento dos payloads.
