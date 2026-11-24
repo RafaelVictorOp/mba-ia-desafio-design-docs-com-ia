@@ -1,12 +1,12 @@
 # RFC: Webhooks de saída para mudanças de status de pedidos
 
-| Campo | Valor |
-| --- | --- |
-| ID | RFC-webhooks-pedidos |
-| Status | Draft |
-| Autor | Não confirmado |
-| Data | 2026-11-02 |
-| Revisores | A definir; revisão de segurança por Sofia foi informada como necessária antes do deploy |
+| Campo                   | Valor                                                                                           |
+| ----------------------- | ----------------------------------------------------------------------------------------------- |
+| ID                      | RFC-webhooks-pedidos                                                                            |
+| Status                  | Draft                                                                                           |
+| Autor                   | Rafael Lopes                                                                                    |
+| Data                    | 2026-11-02                                                                                      |
+| Revisores               | A definir; revisão de segurança por Sofia foi informada como necessária antes do deploy      |
 | Documentos relacionados | [docs/PRD.md](../PRD.md), [TRANSCRICAO.md](../../TRANSCRICAO.md), [docs/TRACKER.md](../TRACKER.md) |
 
 ## 1. Resumo executivo
@@ -173,20 +173,20 @@ Replay reusa exatamente o payload snapshot e `event_id` original; não cria novo
 
 ## 9. Comparação de alternativas e trade-offs
 
-| Critério | Outbox MySQL + worker | Broker dedicado | Síncrono |
-| --- | --- | --- | --- |
-| Atomicidade com pedido | Alta: mesma transação no banco; requer persistência dos endpoints elegíveis junto do pedido | Não é automática: precisa coordenação/relay para evitar dual-write | Baixa: HTTP externo não participa atomicamente do MySQL |
-| Infraestrutura/operação | Reusa MySQL; adiciona processo worker, polling e manutenção de tabelas | Maior: broker, credenciais, deploy e observabilidade próprios | Menor quantidade de componentes, maior acoplamento de disponibilidade |
-| Latência | Poll de 2 s é objetivo, não garantia; backlog e falhas aumentam | Potencialmente menor que polling, depende de topologia e consumidor | Baixa em sucesso rápido; timeout externo degrada pedido |
-| Reprocessamento | Estado e tentativas controláveis por tabelas | Ferramentas de broker variam; DLQ ainda precisa política | Requer fila de compensação para falhas, que reintroduz arquitetura assíncrona |
-| Compatibilidade atual | Alta: Prisma/MySQL e transação já usados | Média/baixa: infraestrutura não localizada | Baixa para requisito de não bloquear o fluxo |
+| Critério                 | Outbox MySQL + worker                                                                           | Broker dedicado                                                         | Síncrono                                                                        |
+| ------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Atomicidade com pedido    | Alta: mesma transação no banco; requer persistência dos endpoints elegíveis junto do pedido | Não é automática: precisa coordenação/relay para evitar dual-write | Baixa: HTTP externo não participa atomicamente do MySQL                         |
+| Infraestrutura/operação | Reusa MySQL; adiciona processo worker, polling e manutenção de tabelas                        | Maior: broker, credenciais, deploy e observabilidade próprios          | Menor quantidade de componentes, maior acoplamento de disponibilidade            |
+| Latência                 | Poll de 2 s é objetivo, não garantia; backlog e falhas aumentam                               | Potencialmente menor que polling, depende de topologia e consumidor     | Baixa em sucesso rápido; timeout externo degrada pedido                         |
+| Reprocessamento           | Estado e tentativas controláveis por tabelas                                                   | Ferramentas de broker variam; DLQ ainda precisa política               | Requer fila de compensação para falhas, que reintroduz arquitetura assíncrona |
+| Compatibilidade atual     | Alta: Prisma/MySQL e transação já usados                                                     | Média/baixa: infraestrutura não localizada                            | Baixa para requisito de não bloquear o fluxo                                    |
 
-| Critério | Vínculo explícito | Qualquer autenticado | Só ADMIN |
-| --- | --- | --- | --- |
-| Isolamento entre clientes | Melhor alinhamento: exige checagem de autorização por recurso | Fraco: identidade autenticada não prova acesso ao `customer_id` | Forte se admin for equipe confiável, mas não modela autonomia do cliente |
-| Complexidade | Média: requer nova relação persistida e provisionamento administrativo | Baixa inicialmente, alto risco de autorização indevida | Baixa/moderada com `requireRole`; pode aumentar carga operacional |
-| Compatibilidade | Reusa autenticação, precisa complementar autorização por recurso | Compatível com middleware atual, mas insuficiente para requisito | Compatível com `requireRole`, sem mudança de modelo de identidade |
-| Manutenção | Regra explícita e escalável, se relação for governada | Simples até haver acesso indevido; auditoria difícil por cliente | Fácil de entender, operacionalmente centralizada |
+| Critério                 | Vínculo explícito                                                       | Qualquer autenticado                                               | Só ADMIN                                                                  |
+| ------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------- |
+| Isolamento entre clientes | Melhor alinhamento: exige checagem de autorização por recurso           | Fraco: identidade autenticada não prova acesso ao `customer_id` | Forte se admin for equipe confiável, mas não modela autonomia do cliente |
+| Complexidade              | Média: requer nova relação persistida e provisionamento administrativo | Baixa inicialmente, alto risco de autorização indevida           | Baixa/moderada com `requireRole`; pode aumentar carga operacional        |
+| Compatibilidade           | Reusa autenticação, precisa complementar autorização por recurso      | Compatível com middleware atual, mas insuficiente para requisito  | Compatível com `requireRole`, sem mudança de modelo de identidade      |
+| Manutenção              | Regra explícita e escalável, se relação for governada                 | Simples até haver acesso indevido; auditoria difícil por cliente | Fácil de entender, operacionalmente centralizada                          |
 
 **Trade-off principal recomendado provisoriamente:** a outbox e a relação `CustomerMembership` adicionam estado, migração e trabalho de provisionamento, mas reduzem acoplamento com sistemas externos e evitam confiar em `customer_id` fornecido pelo cliente. A fonte e a regra de autorização estão definidas nesta proposta; a implementação da relação e a aprovação formal continuam pendentes.
 
@@ -255,19 +255,19 @@ Essa fronteira é deliberadamente operacional: não há garantia de impedir o pr
 
 ## 13. Riscos, premissas e mitigação
 
-| Risco/premissa | Impacto | Mitigação proposta / estado |
-| --- | --- | --- |
-| Vínculo usuário-cliente ausente no modelo atual | Acesso cruzado ou bloqueio de lançamento | A fonte proposta é `CustomerMembership`; ainda é dependência de implementação. Criar e provisionar a relação por fluxo administrativo, negar vínculo ausente/revogado e testar acesso cruzado; não confiar em `customer_id`. |
-| Cliente ainda não confia na secret nova após rotação | HMAC recusado e retries/DLQ | Aviso e resposta segura na rotação; preparar receptor para duas chaves; telemetria de rejeição; documentar que retries usam chave nova. Não há garantia de atualização remota. |
-| Secret comprometida | Falsificação de evento ao endpoint | A reunião não definiu revogação emergencial, grace period ou substituição. Se a operação for adotada, a proposta é restringi-la a `ADMIN` usando o precedente de `requireRole`; semântica da credencial e de requests em andamento continua pendente. |
-| Corrida soft delete/worker | Uma entrega reservada pode iniciar ou chegar ao cliente após o soft delete; um `DISPATCHING` abandonado pode gerar resultado externo desconhecido | Serializar claim e exclusão; cancelar somente PENDING/RETRY; assumir `DISPATCHING` como reserva não cancelável, não como prova de bytes enviados; definir recuperação por lease no FDD e deduplicar por `event_id`. |
-| Payload excessivo | Evento sem entrega ou DLQ sem registro | Contagem exata do JSON UTF-8 no produtor, worker e replay; persistir original e diagnóstico; não gerar retry. Falha de banco de persistência permanece falha transacional. |
-| Replay duplicado concorrente | Múltiplas chamadas/retries para mesma DLQ | Claim exclusivo/transação, `replay_started_at` ou estado equivalente e constraint/idempotência; preservar `event_id`, novo `attempt_id`. |
-| Endpoint lento/indisponível | Atraso e DLQ | Timeout 10 s, cinco retries adicionais nos intervalos confirmados e DLQ; replay não garante sucesso. |
-| SSRF por URL de destino | Acesso a rede interna/serviços não pretendidos | Validação de URL/IP, DNS, redirects e egress a definir com segurança; HTTPS sozinho não cobre esse risco. |
-| Entrega duplicada ou fora de ordem | Consumidor processa evento repetido ou estado antigo | `event_id` imutável e deduplicação no receptor; documentar ausência de garantia absoluta de ordenação. |
-| Worker único/backlog | Atraso > objetivo de 10 s | Métricas/alertas de backlog e idade; objetivo não é garantia. Escala multi-worker fica fora desta versão. |
-| DLQ/auditoria falha ao persistir | A transação da mudança de pedido não pode ser commitada sem o registro durável correspondente | Persistir outbox/DLQ na mesma transação; propagar falha de banco e reverter a transação. Não usar promoção assíncrona como alternativa. |
+| Risco/premissa                                           | Impacto                                                                                                                                              | Mitigação proposta / estado                                                                                                                                                                                                                                       |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Vínculo usuário-cliente ausente no modelo atual        | Acesso cruzado ou bloqueio de lançamento                                                                                                            | A fonte proposta é `CustomerMembership`; ainda é dependência de implementação. Criar e provisionar a relação por fluxo administrativo, negar vínculo ausente/revogado e testar acesso cruzado; não confiar em `customer_id`.                           |
+| Cliente ainda não confia na secret nova após rotação | HMAC recusado e retries/DLQ                                                                                                                          | Aviso e resposta segura na rotação; preparar receptor para duas chaves; telemetria de rejeição; documentar que retries usam chave nova. Não há garantia de atualização remota.                                                                              |
+| Secret comprometida                                      | Falsificação de evento ao endpoint                                                                                                                 | A reunião não definiu revogação emergencial, grace period ou substituição. Se a operação for adotada, a proposta é restringi-la a `ADMIN` usando o precedente de `requireRole`; semântica da credencial e de requests em andamento continua pendente. |
+| Corrida soft delete/worker                               | Uma entrega reservada pode iniciar ou chegar ao cliente após o soft delete; um `DISPATCHING` abandonado pode gerar resultado externo desconhecido | Serializar claim e exclusão; cancelar somente PENDING/RETRY; assumir `DISPATCHING` como reserva não cancelável, não como prova de bytes enviados; definir recuperação por lease no FDD e deduplicar por `event_id`.                                       |
+| Payload excessivo                                        | Evento sem entrega ou DLQ sem registro                                                                                                               | Contagem exata do JSON UTF-8 no produtor, worker e replay; persistir original e diagnóstico; não gerar retry. Falha de banco de persistência permanece falha transacional.                                                                                       |
+| Replay duplicado concorrente                             | Múltiplas chamadas/retries para mesma DLQ                                                                                                           | Claim exclusivo/transação, `replay_started_at` ou estado equivalente e constraint/idempotência; preservar `event_id`, novo `attempt_id`.                                                                                                                   |
+| Endpoint lento/indisponível                             | Atraso e DLQ                                                                                                                                         | Timeout 10 s, cinco retries adicionais nos intervalos confirmados e DLQ; replay não garante sucesso.                                                                                                                                                               |
+| SSRF por URL de destino                                  | Acesso a rede interna/serviços não pretendidos                                                                                                     | Validação de URL/IP, DNS, redirects e egress a definir com segurança; HTTPS sozinho não cobre esse risco.                                                                                                                                                       |
+| Entrega duplicada ou fora de ordem                       | Consumidor processa evento repetido ou estado antigo                                                                                                 | `event_id` imutável e deduplicação no receptor; documentar ausência de garantia absoluta de ordenação.                                                                                                                                                      |
+| Worker único/backlog                                    | Atraso > objetivo de 10 s                                                                                                                            | Métricas/alertas de backlog e idade; objetivo não é garantia. Escala multi-worker fica fora desta versão.                                                                                                                                                       |
+| DLQ/auditoria falha ao persistir                         | A transação da mudança de pedido não pode ser commitada sem o registro durável correspondente                                                   | Persistir outbox/DLQ na mesma transação; propagar falha de banco e reverter a transação. Não usar promoção assíncrona como alternativa.                                                                                                                     |
 
 ## 14. Estratégia de validação e critérios de sucesso
 
@@ -346,6 +346,7 @@ A justificativa é reduzir risco de bloqueio do OMS, reutilizar MySQL/Prisma e m
 Os momentos abaixo registram exatamente onde os principais pontos presentes neste RFC foram abordados na transcrição.
 
 #### Contexto e arquitetura
+
 - **Necessidade dos clientes B2B e consulta repetitiva:** Atlas Comercial, MaxDistribuição e Nova Cargo pediram notificações e hoje usam `GET /orders` repetidamente (`[09:00] Marcos`).
 - **Prazo comercial da Atlas:** possível migração para concorrente se a entrega não ocorrer até o fim do trimestre (`[09:00] Marcos`).
 - **Critério de tempo real:** menos de 10 segundos é considerado tempo real pelos clientes (`[09:02] Marcos`).
@@ -359,6 +360,7 @@ Os momentos abaixo registram exatamente onde os principais pontos presentes nest
 - **Prisma por processo:** worker conecta ao mesmo banco com instância Prisma própria, pois é outro processo Node.js (`[09:29] Diego`, `[09:30] Bruno`, `[09:30] Larissa`).
 
 #### Contratos e entrega
+
 - **Snapshot na outbox:** o payload é renderizado na inserção para refletir o estado da mudança, não o estado posterior do pedido (`[09:51] Diego`, `[09:51] Larissa`, `[09:51] Bruno`, `[09:52] Larissa`, `[09:52] Diego`, `[09:52] Bruno`).
 - **UUID da outbox:** decisão de usar UUID, no padrão do restante do projeto (`[09:51] Diego`, `[09:51] Larissa`).
 - **Integração transacional com pedidos:** `changeStatus` deve publicar o evento elegível usando o cliente transacional atual e falha de outbox deve reverter todo o fluxo (`[09:40] Bruno`, `[09:41] Diego`, `[09:41] Bruno`, `[09:41] Diego`).
@@ -371,12 +373,14 @@ Os momentos abaixo registram exatamente onde os principais pontos presentes nest
 - **Limite de payload informado na reunião:** rejeitar payload acima de 64 KB sem enviar ou truncar (`[09:23] Sofia`, `[09:24] Larissa`, `[09:24] Diego`). O limite físico adotado na proposta é 65.536 bytes/64 KiB.
 
 #### Retentativas, DLQ e replay
+
 - **Cinco tentativas adicionais:** os intervalos acordados são 1 minuto, 5 minutos, 30 minutos, 2 horas e 12 horas (`[09:15] Diego`, `[09:16] Larissa`, `[09:17] Diego`, `[09:17] Marcos`, `[09:17] Larissa`). A contagem como adicional à tentativa inicial foi esclarecida durante a elaboração posterior do PRD, não explicitamente definida na transcrição.
 - **DLQ separada:** tabela `webhook_dead_letter` com payload, motivo da falha e timestamp, separada da outbox principal (`[09:17] Larissa`, `[09:18] Diego`, `[09:18] Bruno`, `[09:18] Diego`).
 - **Replay administrativo:** `POST /admin/webhooks/dead-letter/:id/replay` recoloca o evento na outbox como pendente (`[09:18] Diego`, `[09:18] Bruno`, `[09:19] Larissa`, `[09:35] Diego`, `[09:35] Larissa`).
 - **Replay somente para ADMIN:** o replay exige role `ADMIN` e deve registrar o administrador solicitante (`[09:35] Larissa`, `[09:36] Sofia`, `[09:36] Larissa`, `[09:49] Sofia`).
 
 #### Segurança e autorização
+
 - **HMAC-SHA256:** assinar o corpo do request com algoritmo padrão de mercado e enviar a assinatura em `X-Signature` (`[09:19] Sofia`, `[09:20] Sofia`, `[09:20] Bruno`, `[09:20] Sofia`).
 - **Secret por endpoint:** cada webhook possui secret exclusiva, não uma secret global (`[09:21] Sofia`, `[09:21] Bruno`, `[09:21] Sofia`).
 - **Rotação:** secret anterior permanece válida em paralelo por 24 horas após a rotação (`[09:21] Sofia`, `[09:22] Diego`, `[09:22] Sofia`, `[09:22] Larissa`).
@@ -386,6 +390,7 @@ Os momentos abaixo registram exatamente onde os principais pontos presentes nest
 - **Revisão de segurança:** reservar pelo menos dois dias úteis para HMAC e geração/armazenamento de secrets antes do deploy (`[09:46] Sofia`, `[09:47] Larissa`, `[09:49] Sofia`).
 
 #### Fora de escopo e riscos
+
 - **E-mail de falha:** fora desta fase; possível avaliação futura após medir impacto (`[09:37] Larissa`, `[09:37] Marcos`, `[09:38] Marcos`).
 - **Rate limiting de saída:** fora desta fase; observar volume e decidir posteriormente (`[09:38] Diego`, `[09:39] Larissa`, `[09:39] Diego`).
 - **Dashboard/painel visual:** fora desta fase; o frontend atende via endpoints da API (`[09:39] Marcos`, `[09:40] Larissa`, `[09:40] Marcos`).
@@ -401,9 +406,9 @@ As regras de `CustomerMembership`, soft delete, `DISPATCHING` e classificação 
 
 ## 18. Histórico de revisões
 
-| Data | Alteração | Responsável |
-| --- | --- | --- |
-| 2026-11-02 | Criação do RFC em estado Draft a partir do PRD, transcrição, código consultado e diretrizes informadas durante a entrevista. | Não confirmado |
-| 2026-11-14 | Definição proposta de `CustomerMembership` como fonte de autorização por cliente; sincronização do ADR-021 e registro de que a pendência de concorrência do ADR-022 permanece aberta. | Não confirmado |
+| Data       | Alteração                                                                                                                                                                                                                      | Responsável    |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| 2026-11-02 | Criação do RFC em estado Draft a partir do PRD, transcrição, código consultado e diretrizes informadas durante a entrevista.                                                                                                | Não confirmado |
+| 2026-11-14 | Definição proposta de `CustomerMembership` como fonte de autorização por cliente; sincronização do ADR-021 e registro de que a pendência de concorrência do ADR-022 permanece aberta.                                  | Não confirmado |
 | 2026-11-14 | Precisada a semântica de `DISPATCHING`: reserva não cancelável, que pode anteceder o início efetivo do HTTP; exclusão posterior não cancela a entrega reservada. Aprovação formal Product/Security permanece pendente. | Não confirmado |
 | 2026-11-14 | Revisada a rastreabilidade de secrets: ativação imediata permanece proposta, revogação ADMIN-only é extensão do precedente de replay e divulgação única/grace period/requests em voo não são atribuídos à reunião. | Não confirmado |
