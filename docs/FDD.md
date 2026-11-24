@@ -4,7 +4,7 @@
 | ----------------------- | ------------------------------------------------------------------------------------------------------------ |
 | ID                      | FDD-webhooks-pedidos                                                                                         |
 | Status                  | Draft                                                                                                        |
-| Autor                   | Não confirmado                                                                                              |
+| Autor                   | Rafael Lopes                                                                                                 |
 | Data                    | 2026-11-22                                                                                                   |
 | Revisores               | A definir; revisão de segurança por Sofia foi informada como necessária antes do deploy                   |
 | Documentos relacionados | [docs/PRD.md](PRD.md), [docs/RFC.md](RFC.md), [TRANSCRICAO.md](../TRANSCRICAO.md), [docs/TRACKER.md](TRACKER.md) |
@@ -384,23 +384,23 @@ A resposta do destinatário é ilustrativa; códigos de sucesso aceitos e semân
 
 **Matriz de erros do módulo**
 
-| Código | HTTP | Quando ocorre | Tratamento/fallback |
-| --- | ---: | --- | --- |
-| `WEBHOOK_INVALID_REQUEST` | 400 | UUID, URL HTTPS, statuses, paginação ou body inválido | Rejeitar antes de persistir e devolver detalhes de validação. |
-| `WEBHOOK_UNAUTHENTICATED` | 401 | JWT ausente, inválido ou expirado | Negar a operação. |
-| `WEBHOOK_CUSTOMER_ACCESS_DENIED` | 403 | Usuário sem vínculo ativo com o cliente do recurso | Negar por padrão sem revelar dados do recurso. |
-| `WEBHOOK_ADMIN_REQUIRED` | 403 | Operação administrativa feita sem role `ADMIN` | Negar e registrar a tentativa de auditoria. |
-| `WEBHOOK_ENDPOINT_NOT_FOUND` | 404 | Configuração inexistente, removida ou invisível ao usuário | Não revelar se o recurso pertence a outro cliente. |
-| `WEBHOOK_DLQ_ITEM_NOT_FOUND` | 404 | Item da DLQ inexistente | Não agendar replay. |
-| `WEBHOOK_ENDPOINT_ALREADY_EXISTS` | 409 | Cliente já possui a mesma URL ativa | Preservar o cadastro existente. |
-| `WEBHOOK_ENDPOINT_DISPATCHING` | 409 | Exclusão conflita com entrega já reservada | Concluir a tentativa reservada e bloquear a exclusão concorrente. |
-| `WEBHOOK_REPLAY_ALREADY_PENDING` | 409 | Evento já está pendente ou em processamento | Não criar replay concorrente. |
-| `WEBHOOK_PAYLOAD_TOO_LARGE` | 422 | Payload serializado excede 64 KB UTF-8 | Não truncar nem enviar; mover diretamente para a DLQ. |
-| `WEBHOOK_DELIVERY_REJECTED` | 422 | Destino responde `4xx` não retentável | Registrar falha permanente e mover para a DLQ. |
-| `WEBHOOK_DELIVERY_RETRYABLE` | 502 | Falha de conexão ou resposta `408`, `425`, `429` ou `5xx` | Registrar tentativa e reagendar conforme o backoff. |
-| `WEBHOOK_DELIVERY_TIMEOUT` | 504 | Destino não responde em 10 segundos | Registrar tentativa e reagendar conforme o backoff. |
-| `WEBHOOK_OUTBOX_WRITE_FAILED` | 500 | Falha ao gravar o evento na transação do pedido | Fazer rollback integral e propagar erro. |
-| `WEBHOOK_INTERNAL_ERROR` | 500 | Falha inesperada da API ou do worker | Registrar `request_id`/`attempt_id` sem expor detalhes internos. |
+| Código                             | HTTP | Quando ocorre                                                      | Tratamento/fallback                                                  |
+| ----------------------------------- | ---: | ------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| `WEBHOOK_INVALID_REQUEST`         |  400 | UUID, URL HTTPS, statuses, paginação ou body inválido           | Rejeitar antes de persistir e devolver detalhes de validação.      |
+| `WEBHOOK_UNAUTHENTICATED`         |  401 | JWT ausente, inválido ou expirado                                 | Negar a operação.                                                  |
+| `WEBHOOK_CUSTOMER_ACCESS_DENIED`  |  403 | Usuário sem vínculo ativo com o cliente do recurso               | Negar por padrão sem revelar dados do recurso.                      |
+| `WEBHOOK_ADMIN_REQUIRED`          |  403 | Operação administrativa feita sem role `ADMIN`                 | Negar e registrar a tentativa de auditoria.                          |
+| `WEBHOOK_ENDPOINT_NOT_FOUND`      |  404 | Configuração inexistente, removida ou invisível ao usuário     | Não revelar se o recurso pertence a outro cliente.                  |
+| `WEBHOOK_DLQ_ITEM_NOT_FOUND`      |  404 | Item da DLQ inexistente                                            | Não agendar replay.                                                 |
+| `WEBHOOK_ENDPOINT_ALREADY_EXISTS` |  409 | Cliente já possui a mesma URL ativa                               | Preservar o cadastro existente.                                      |
+| `WEBHOOK_ENDPOINT_DISPATCHING`    |  409 | Exclusão conflita com entrega já reservada                       | Concluir a tentativa reservada e bloquear a exclusão concorrente.   |
+| `WEBHOOK_REPLAY_ALREADY_PENDING`  |  409 | Evento já está pendente ou em processamento                      | Não criar replay concorrente.                                       |
+| `WEBHOOK_PAYLOAD_TOO_LARGE`       |  422 | Payload serializado excede 64 KB UTF-8                             | Não truncar nem enviar; mover diretamente para a DLQ.               |
+| `WEBHOOK_DELIVERY_REJECTED`       |  422 | Destino responde `4xx` não retentável                          | Registrar falha permanente e mover para a DLQ.                       |
+| `WEBHOOK_DELIVERY_RETRYABLE`      |  502 | Falha de conexão ou resposta `408`, `425`, `429` ou `5xx` | Registrar tentativa e reagendar conforme o backoff.                  |
+| `WEBHOOK_DELIVERY_TIMEOUT`        |  504 | Destino não responde em 10 segundos                               | Registrar tentativa e reagendar conforme o backoff.                  |
+| `WEBHOOK_OUTBOX_WRITE_FAILED`     |  500 | Falha ao gravar o evento na transação do pedido                  | Fazer rollback integral e propagar erro.                             |
+| `WEBHOOK_INTERNAL_ERROR`          |  500 | Falha inesperada da API ou do worker                               | Registrar `request_id`/`attempt_id` sem expor detalhes internos. |
 
 Os códigos são usados em `AppError.errorCode`, nos logs e, quando houver resposta da API, no envelope do middleware central de erros. Secrets, assinaturas, tokens e payloads completos nunca são incluídos no erro.
 
@@ -449,18 +449,18 @@ Os códigos são usados em `AppError.errorCode`, nos logs e, quando houver respo
 
 **Integração com o sistema existente**
 
-| Caminho real do código-base | Integração necessária |
-| --- | --- |
-| `src/modules/orders/order.service.ts` | Estender `changeStatus()` para selecionar endpoints elegíveis e gravar snapshots na outbox dentro da transação Prisma existente. |
-| `src/modules/orders/order.repository.ts` | Reutilizar as operações de pedido/histórico e compartilhar o transaction client com a gravação da outbox. |
-| `src/routes/index.ts` | Registrar os novos routers `/webhooks` e `/admin/webhooks` sob o prefixo da aplicação. |
-| `src/app.ts` | Construir repositories, services e controllers do módulo e manter a montagem global em `/api/v1`. |
-| `src/middlewares/auth.middleware.ts` | Reutilizar `authenticate` e `requireRole('ADMIN')` e aplicar autorização por vínculo cliente-recurso. |
-| `src/middlewares/validate.middleware.ts` | Validar params, query e bodies dos contratos com schemas Zod. |
-| `src/middlewares/error.middleware.ts` | Preservar o envelope de `AppError` e os status/códigos `WEBHOOK_*` da matriz. |
-| `src/shared/errors/app-error.ts` | Representar falhas do domínio com `statusCode`, `errorCode` e `details`. |
-| `src/shared/logger/index.ts` | Reutilizar Pino e ampliar a redação de secrets, assinaturas e tokens. |
-| `prisma/schema.prisma` | Adicionar configurações, memberships, eventos/outbox, tentativas, DLQ e auditoria relacionados a `Customer`, `User` e `Order`. |
+| Caminho real do código-base               | Integração necessária                                                                                                               |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/modules/orders/order.service.ts`    | Estender `changeStatus()` para selecionar endpoints elegíveis e gravar snapshots na outbox dentro da transação Prisma existente.  |
+| `src/modules/orders/order.repository.ts` | Reutilizar as operações de pedido/histórico e compartilhar o transaction client com a gravação da outbox.                         |
+| `src/routes/index.ts`                    | Registrar os novos routers `/webhooks` e `/admin/webhooks` sob o prefixo da aplicação.                                           |
+| `src/app.ts`                             | Construir repositories, services e controllers do módulo e manter a montagem global em `/api/v1`.                                   |
+| `src/middlewares/auth.middleware.ts`     | Reutilizar `authenticate` e `requireRole('ADMIN')` e aplicar autorização por vínculo cliente-recurso.                           |
+| `src/middlewares/validate.middleware.ts` | Validar params, query e bodies dos contratos com schemas Zod.                                                                          |
+| `src/middlewares/error.middleware.ts`    | Preservar o envelope de `AppError` e os status/códigos `WEBHOOK_*` da matriz.                                                     |
+| `src/shared/errors/app-error.ts`         | Representar falhas do domínio com `statusCode`, `errorCode` e `details`.                                                        |
+| `src/shared/logger/index.ts`             | Reutilizar Pino e ampliar a redação de secrets, assinaturas e tokens.                                                                |
+| `prisma/schema.prisma`                   | Adicionar configurações, memberships, eventos/outbox, tentativas, DLQ e auditoria relacionados a `Customer`, `User` e `Order`. |
 
 Arquivos novos devem seguir a estrutura atual em `src/modules`: `src/modules/webhooks/webhook.routes.ts`, `webhook.controller.ts`, `webhook.service.ts`, `webhook.repository.ts` e `webhook.schemas.ts`. O worker terá entrypoint próprio em `src/workers/webhook-delivery.worker.ts` e um `PrismaClient` independente do processo HTTP.
 

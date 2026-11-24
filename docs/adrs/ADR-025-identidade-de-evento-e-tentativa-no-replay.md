@@ -19,7 +19,9 @@ A entrega at-least-once usa um `event_id` estável para permitir deduplicação 
 ## Opções consideradas
 
 - **Preservar payload e `event_id`, com novo identificador de tentativa:** proposta documentada no RFC.
-- As fontes não registram uma alternativa específica de identidade para replay; não se presume que criar um novo evento de negócio tenha sido considerado.
+- **Criar um novo `event_id` para cada replay:** alternativa plausível que simplifica o tratamento do replay como um novo evento, mas perde a identidade estável do evento de negócio e dificulta a deduplicação pelo consumidor.
+
+A segunda opção não foi deliberada na reunião; ela é registrada como alternativa técnica plausível para tornar explícito o trade-off da decisão proposta, sem atribuí-la às fontes históricas.
 
 ## Resultado da decisão
 
@@ -42,6 +44,11 @@ Verificar que replay mantém byte a byte o snapshot persistido e o `event_id`; c
 
 - **Pró:** mantém a identidade do evento de negócio e possibilita deduplicação consistente pelo consumidor.
 - **Contra:** exige controle concorrente e histórico separado por tentativa para evitar que replay altere ou oculte a evidência original.
+
+### Novo `event_id` para cada replay
+
+- **Pró:** permite modelar cada replay como evento independente e reduz a necessidade de distinguir identidade de negócio e identidade de tentativa.
+- **Contra:** impede que o consumidor reconheça entrega original e replay como manifestações do mesmo evento e pode produzir efeitos duplicados.
 
 ## Mais informações
 
