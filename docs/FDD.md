@@ -31,7 +31,7 @@ A feature adiciona notificações outbound para endpoints HTTPS dos clientes B2B
 - O polling de 2 segundos e a meta de iniciar a primeira tentativa em menos de 10 segundos em operação normal não constituem SLA.
 - O código atual não contém módulo de webhook, worker, outbox, histórico de entregas ou DLQ; o `package.json` também não declara comando `worker`.
 - A implementação deve reutilizar `AppError`, Pino, middleware centralizado de erros, schemas Zod e o prefixo `WEBHOOK_` para códigos do módulo.
-- A exigência de vínculo persistido entre usuário e cliente para CRUD e consulta de entregas foi confirmada pelo solicitante nesta etapa (2026-11-22). O solicitante também confirmou conceder e revogar vínculos por API administrativa restrita a `ADMIN`, com auditoria, usando `POST /api/v1/admin/customer-memberships` e `DELETE /api/v1/admin/customer-memberships/:id`. A auditoria deve incluir ator, ação, usuário-alvo, cliente, horário e resultado. Essas confirmações não constam em `TRANSCRICAO.md`; o modelo físico, os payloads, as respostas, o armazenamento e a retenção da auditoria ainda precisam ser definidos e implementados.
+- Nesta fase, qualquer role autenticada pode executar o CRUD de configurações de webhook (`[09:36] Marcos`, `[09:37] Sofia`). O `customer_id` continua sendo informado no body ou no path e não é inferido do JWT. A autorização por vínculo persistido entre usuário e cliente é uma proposta de endurecimento futuro do RFC/ADR-021, não um requisito confirmado para esta versão.
 - Soft delete, classificação antecipada de payload grande e semântica de identidade no replay continuam como propostas do RFC, pendentes de aprovação.
 
 ---
@@ -58,7 +58,6 @@ A feature adiciona notificações outbound para endpoints HTTPS dos clientes B2B
 - Assinatura HMAC-SHA256, headers de identificação e limite de payload informado como 64 KB.
 - Histórico consultável das até 100 entregas mais recentes por webhook.
 - DLQ separada e endpoint de replay restrito a `ADMIN`, com auditoria do solicitante.
-- Concessão e revogação de vínculos usuário-cliente por API administrativa restrita a `ADMIN`, com auditoria.
 - Reuso dos padrões atuais de validação, erros, logging, autenticação e autorização por role.
 
 **Excluído**
@@ -68,7 +67,7 @@ A feature adiciona notificações outbound para endpoints HTTPS dos clientes B2B
 
 **A definir**
 
-- Modelo físico, ciclo de vida e fonte autoritativa do vínculo usuário-cliente; rotas, payloads, respostas e campos de auditoria da API administrativa.
+- Se e quando o endurecimento de autorização for priorizado: decidir se haverá vínculo usuário-cliente, sua fonte autoritativa, modelo físico, ciclo de vida, provisionamento, auditoria e contratos administrativos. Esta proposta futura não bloqueia o CRUD autenticado desta fase.
 
 ---
 
@@ -83,11 +82,10 @@ A feature adiciona notificações outbound para endpoints HTTPS dos clientes B2B
 - Após o commit, o worker independente consulta os eventos pendentes por polling, em batches pequenos e por ordem de criação.
 - O worker envia POST HTTPS com o payload e headers de assinatura/identificação, aguarda no máximo 10 segundos e registra o resultado.
 - O sistema agenda novas tentativas conforme a política definida e, após o limite, preserva a falha na DLQ.
-- Para CRUD de configurações e consulta de entregas, a API deve exigir vínculo persistido entre a identidade do JWT e o cliente do recurso; sem vínculo correspondente, deve negar o acesso. O ciclo de vida e a revogação ainda precisam de definição.
+- Para o CRUD de configurações, a API exige JWT válido e aceita qualquer role autenticada nesta fase. O endurecimento por vínculo usuário-cliente fica para evolução futura.
 
 **Fluxos alternativos e exceções**
 
-- Um administrador concede ou revoga um vínculo usuário-cliente por API administrativa; a operação deve deixar auditoria. Rotas estão definidas na seção 5; schema do vínculo, validações, códigos HTTP e retenção da auditoria ainda precisam ser definidos.
 - Sem endpoints inscritos no status de destino, nenhuma linha de evento é criada.
 - Falha na escrita transacional da outbox deve reverter a mudança de pedido, histórico e efeitos de estoque.
 - Falha HTTP ou timeout é tratada como falha de entrega e segue a política de retentativas.
@@ -124,7 +122,7 @@ flowchart TD
     S -->|Não| U["Persistir falha na DLQ"]
 ```
 
-O critério HTTP de sucesso e o tratamento final de payload excedente ainda precisam ser definidos. A coordenação de concorrência na exclusão, a semântica de `DISPATCHING` e a recuperação por lease também permanecem pendentes; por isso, o diagrama não os representa como decisões fechadas. O fluxo de CRUD e consulta de entregas exige o vínculo persistido descrito acima; a API administrativa de vínculos está detalhada na seção 5.
+O critério HTTP de sucesso e o tratamento final de payload excedente ainda precisam ser definidos. A coordenação de concorrência na exclusão, a semântica de `DISPATCHING` e a recuperação por lease também permanecem pendentes; por isso, o diagrama não os representa como decisões fechadas. O fluxo de CRUD exige autenticação por JWT; não há vínculo persistido usuário-cliente como requisito desta fase.
 
 ---
 
@@ -158,7 +156,7 @@ Os contratos abaixo são normativos para a implementação. Todas as rotas exige
 }
 ```
 
-- **Status codes:** `201`; `400 WEBHOOK_INVALID_REQUEST`; `401 WEBHOOK_UNAUTHENTICATED`; `403 WEBHOOK_CUSTOMER_ACCESS_DENIED`; `409 WEBHOOK_ENDPOINT_ALREADY_EXISTS`; `500 WEBHOOK_INTERNAL_ERROR`. A secret é exibida somente na criação.
+- **Status codes:** `201`; `400 WEBHOOK_INVALID_REQUEST`; `401 WEBHOOK_UNAUTHENTICATED`; `409 WEBHOOK_ENDPOINT_ALREADY_EXISTS`; `500 WEBHOOK_INTERNAL_ERROR`. A secret é exibida somente na criação.
 
 #### Atualizar configuração
 
@@ -185,14 +183,14 @@ Os contratos abaixo são normativos para a implementação. Todas as rotas exige
 }
 ```
 
-- **Status codes:** `200`; `400 WEBHOOK_INVALID_REQUEST`; `401 WEBHOOK_UNAUTHENTICATED`; `403 WEBHOOK_CUSTOMER_ACCESS_DENIED`; `404 WEBHOOK_ENDPOINT_NOT_FOUND`; `409 WEBHOOK_ENDPOINT_ALREADY_EXISTS`; `500 WEBHOOK_INTERNAL_ERROR`.
+- **Status codes:** `200`; `400 WEBHOOK_INVALID_REQUEST`; `401 WEBHOOK_UNAUTHENTICATED`; `404 WEBHOOK_ENDPOINT_NOT_FOUND`; `409 WEBHOOK_ENDPOINT_ALREADY_EXISTS`; `500 WEBHOOK_INTERNAL_ERROR`.
 
 #### Remover configuração
 
 - **Rota:** `DELETE /api/v1/webhooks/:id`
 - **Request:** sem body.
 - **Response `204 No Content`:** sem body. A remoção é lógica (`active=false` e `deleted_at` preenchido) e impede a criação de novos eventos.
-- **Status codes:** `204`; `401 WEBHOOK_UNAUTHENTICATED`; `403 WEBHOOK_CUSTOMER_ACCESS_DENIED`; `404 WEBHOOK_ENDPOINT_NOT_FOUND`; `409 WEBHOOK_ENDPOINT_DISPATCHING`; `500 WEBHOOK_INTERNAL_ERROR`.
+- **Status codes:** `204`; `401 WEBHOOK_UNAUTHENTICATED`; `404 WEBHOOK_ENDPOINT_NOT_FOUND`; `409 WEBHOOK_ENDPOINT_DISPATCHING`; `500 WEBHOOK_INTERNAL_ERROR`.
 
 #### Listar configurações de um cliente
 
@@ -215,7 +213,7 @@ Os contratos abaixo são normativos para a implementação. Todas as rotas exige
 }
 ```
 
-- **Status codes:** `200`; `400 WEBHOOK_INVALID_REQUEST`; `401 WEBHOOK_UNAUTHENTICATED`; `403 WEBHOOK_CUSTOMER_ACCESS_DENIED`; `500 WEBHOOK_INTERNAL_ERROR`.
+- **Status codes:** `200`; `400 WEBHOOK_INVALID_REQUEST`; `401 WEBHOOK_UNAUTHENTICATED`; `500 WEBHOOK_INTERNAL_ERROR`.
 
 #### Consultar histórico de entregas
 
@@ -239,7 +237,7 @@ Os contratos abaixo são normativos para a implementação. Todas as rotas exige
 }
 ```
 
-- **Status codes:** `200`; `400 WEBHOOK_INVALID_REQUEST`; `401 WEBHOOK_UNAUTHENTICATED`; `403 WEBHOOK_CUSTOMER_ACCESS_DENIED`; `404 WEBHOOK_ENDPOINT_NOT_FOUND`; `500 WEBHOOK_INTERNAL_ERROR`.
+- **Status codes:** `200`; `400 WEBHOOK_INVALID_REQUEST`; `401 WEBHOOK_UNAUTHENTICATED`; `404 WEBHOOK_ENDPOINT_NOT_FOUND`; `500 WEBHOOK_INTERNAL_ERROR`.
 
 Esses cinco contratos definem rota, request, response e status HTTP. O replay administrativo permanece em `POST /api/v1/admin/webhooks/dead-letter/:id/replay`, com `202` em caso de aceite, e a entrega outbound considera qualquer `2xx` sucesso; `408`, `425`, `429`, `5xx`, falha de conexão e timeout são retentáveis.
 
@@ -248,7 +246,7 @@ Esses cinco contratos definem rota, request, response e status HTTP. O replay ad
 - Tipo: endpoint
 - Assinatura/Rota: `POST /api/v1/webhooks`, `PATCH /api/v1/webhooks/:id`, `DELETE /api/v1/webhooks/:id` e `GET /api/v1/webhooks`, conforme os contratos normativos acima.
 - Método: `POST`, `PATCH`, `DELETE` ou `GET`, conforme operação.
-- Autenticação: JWT. `customer_id` é informado no body ou path; não é inferido diretamente do JWT. Para CRUD e consulta, também é obrigatório vínculo persistido entre o usuário autenticado e o cliente do recurso.
+- Autenticação: JWT. `customer_id` é informado no body ou path; não é inferido diretamente do JWT. Nesta fase, qualquer role autenticada pode executar o CRUD; não há exigência de vínculo persistido usuário-cliente.
 - Semântica de status/headers: status HTTP, formato de erros e respostas estão definidos nos contratos normativos acima.
 
 **Exemplo de requisição**
@@ -274,18 +272,6 @@ Esses cinco contratos definem rota, request, response e status HTTP. O replay ad
 ```
 
 Os schemas normativos são os definidos no início desta seção; a secret não é devolvida em operações posteriores.
-
-**Gestão de vínculos usuário-cliente**
-
-- Tipo: endpoint administrativo
-- Assinatura/Rota: `POST /api/v1/admin/customer-memberships` para concessão e `DELETE /api/v1/admin/customer-memberships/:id` para revogação.
-- Método: `POST` e `DELETE`.
-- Autorização: JWT com role `ADMIN`.
-- Auditoria: registrar ator, ação, usuário-alvo, cliente, horário e resultado de cada concessão/revogação. Armazenamento e retenção ainda a definir.
-
-**Exemplos de requisição e resposta**
-
-Payloads, códigos HTTP e formatos de resposta ainda não definidos; não assumir nomes de campos.
 
 **Consulta do histórico de entregas**
 
@@ -388,7 +374,6 @@ A resposta do destinatário é ilustrativa; códigos de sucesso aceitos e semân
 | ----------------------------------- | ---: | ------------------------------------------------------------------ | -------------------------------------------------------------------- |
 | `WEBHOOK_INVALID_REQUEST`         |  400 | UUID, URL HTTPS, statuses, paginação ou body inválido           | Rejeitar antes de persistir e devolver detalhes de validação.      |
 | `WEBHOOK_UNAUTHENTICATED`         |  401 | JWT ausente, inválido ou expirado                                 | Negar a operação.                                                  |
-| `WEBHOOK_CUSTOMER_ACCESS_DENIED`  |  403 | Usuário sem vínculo ativo com o cliente do recurso               | Negar por padrão sem revelar dados do recurso.                      |
 | `WEBHOOK_ADMIN_REQUIRED`          |  403 | Operação administrativa feita sem role `ADMIN`                 | Negar e registrar a tentativa de auditoria.                          |
 | `WEBHOOK_ENDPOINT_NOT_FOUND`      |  404 | Configuração inexistente, removida ou invisível ao usuário     | Não revelar se o recurso pertence a outro cliente.                  |
 | `WEBHOOK_DLQ_ITEM_NOT_FOUND`      |  404 | Item da DLQ inexistente                                            | Não agendar replay.                                                 |
@@ -412,8 +397,6 @@ Os códigos são usados em `AppError.errorCode`, nos logs e, quando houver respo
   - Payload acima de 64 KB: não enviar nem truncar; classificação final (DLQ direta ou outro tratamento) depende de aprovação do RFC.
   - Usuário sem autenticação válida: negar acesso às operações autenticadas.
   - Replay por role diferente de `ADMIN`: negar operação.
-  - Concessão ou revogação de vínculo por usuário que não seja `ADMIN`: negar operação.
-  - Ausência de vínculo persistido usuário-cliente: negar acesso a CRUD e histórico. Como representar revogação e propagar seus efeitos ainda precisa ser definido.
 - Estratégia de retentativas: cinco tentativas foram acordadas, com intervalos de 1 minuto, 5 minutos, 30 minutos, 2 horas e 12 horas. A transcrição não esclarece se a tentativa inicial integra o total; o PRD interpreta esses intervalos como retentativas adicionais. Confirmar essa interpretação antes de implementar.
 - Estratégias de resiliência adicionais: timeouts definidos; regras de backoff estão descritas pelos intervalos acima. Circuit breaker não foi definido.
 - Política de fallback: após esgotar as retentativas, persistir falha em DLQ separada e permitir replay manual por `ADMIN`; replay não garante entrega.
@@ -455,12 +438,12 @@ Os códigos são usados em `AppError.errorCode`, nos logs e, quando houver respo
 | `src/modules/orders/order.repository.ts` | Reutilizar as operações de pedido/histórico e compartilhar o transaction client com a gravação da outbox.                         |
 | `src/routes/index.ts`                    | Registrar os novos routers `/webhooks` e `/admin/webhooks` sob o prefixo da aplicação.                                           |
 | `src/app.ts`                             | Construir repositories, services e controllers do módulo e manter a montagem global em `/api/v1`.                                   |
-| `src/middlewares/auth.middleware.ts`     | Reutilizar `authenticate` e `requireRole('ADMIN')` e aplicar autorização por vínculo cliente-recurso.                           |
+| `src/middlewares/auth.middleware.ts`     | Reutilizar `authenticate` no CRUD para qualquer role autenticada e `requireRole('ADMIN')` no replay.                           |
 | `src/middlewares/validate.middleware.ts` | Validar params, query e bodies dos contratos com schemas Zod.                                                                          |
 | `src/middlewares/error.middleware.ts`    | Preservar o envelope de `AppError` e os status/códigos `WEBHOOK_*` da matriz.                                                     |
 | `src/shared/errors/app-error.ts`         | Representar falhas do domínio com `statusCode`, `errorCode` e `details`.                                                        |
 | `src/shared/logger/index.ts`             | Reutilizar Pino e ampliar a redação de secrets, assinaturas e tokens.                                                                |
-| `prisma/schema.prisma`                   | Adicionar configurações, memberships, eventos/outbox, tentativas, DLQ e auditoria relacionados a `Customer`, `User` e `Order`. |
+| `prisma/schema.prisma`                   | Adicionar configurações, eventos/outbox, tentativas, DLQ e auditoria de replay relacionados a `Customer`, `User` e `Order`. |
 
 Arquivos novos devem seguir a estrutura atual em `src/modules`: `src/modules/webhooks/webhook.routes.ts`, `webhook.controller.ts`, `webhook.service.ts`, `webhook.repository.ts` e `webhook.schemas.ts`. O worker terá entrypoint próprio em `src/workers/webhook-delivery.worker.ts` e um `PrismaClient` independente do processo HTTP.
 
@@ -494,8 +477,7 @@ Arquivos novos devem seguir a estrutura atual em `src/modules`: `src/modules/web
 - [ ] Tentativas mantêm `X-Event-Id` estável; duplicatas são documentadas e consumidor pode deduplicar.
 - [ ] O limite de 64 KB é testado em bytes UTF-8 nos limites inferior, igual e superior; sem truncamento ou envio acima do limite.
 - [ ] Replay requer role `ADMIN` e registra o administrador; concorrência e identidade por tentativa são validadas após aprovação do desenho.
-- [ ] CRUD e consulta de entregas exigem vínculo persistido entre usuário autenticado e cliente do recurso; vínculo ausente e acesso a `customer_id` de terceiro são negados. Validar o comportamento de vínculo revogado após definir seu ciclo de vida.
-- [ ] Concessão e revogação de vínculos usuário-cliente só podem ser feitas por `ADMIN` via API administrativa e cada operação deixa auditoria; validar após definição dos contratos e campos.
+- [ ] CRUD de configurações exige JWT válido e aceita qualquer role autenticada; não depende de vínculo persistido usuário-cliente nesta fase.
 - [ ] A revisão de segurança antecede o deploy, com pelo menos dois dias úteis reservados.
 - [ ] Métricas, logs, tracing, limiares de alertas, payload e armazenamento de secrets são definidos e revisados antes do rollout.
 
@@ -503,15 +485,12 @@ Arquivos novos devem seguir a estrutura atual em `src/modules`: `src/modules/web
 
 ### 10. Riscos e mitigação
 
-### Vínculo de autorização confirmado, mas ausente no código atual
+### Autorização por cliente adiada
 
 - **Probabilidade:** alta (hipótese; não estimada nas fontes)
 - **Impacto:** acesso cruzado a configurações, secrets ou histórico de outro cliente.
-- **Mitigação:**
-  - Definir e implementar o modelo e os contratos da API administrativa; restringir a `ADMIN` e auditar concessões/revogações antes do deploy.
-  - Negar por padrão quando autorização por recurso não puder ser demonstrada.
-  - Testar vínculo ausente, revogado e acesso a `customer_id` de terceiro.
-- **Plano de contingência:** bloquear operações de gestão/consulta até que a autorização esteja implementada e revisada.
+- **Mitigação:** manter explícito que o comportamento atual desta fase aceita qualquer role autenticada e levar a autorização por cliente para priorização futura no RFC/ADR-021, com revisão de modelo, provisionamento e auditoria antes de adotá-la.
+- **Plano de contingência:** se o risco deixar de ser aceitável, restringir temporariamente o CRUD por role ou desabilitá-lo até que uma política de autorização por recurso seja aprovada; não introduzir silenciosamente um vínculo não acordado.
 
 ### Corrida entre soft delete e reserva do worker
 
